@@ -8,8 +8,6 @@
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
-  <div class="grid-noise" aria-hidden="true"></div>
-
   <header class="topbar">
     <div class="brand-lockup">
       <div class="brand-mark" aria-hidden="true">
@@ -37,10 +35,9 @@
 
   <main class="dashboard">
     <aside class="column column-left">
-      <section class="panel account-panel reveal">
+      <section class="panel account-panel">
         <div class="section-heading">
           <div>
-            <p class="section-index">01 / ACCOUNT</p>
             <h2>游戏账号</h2>
           </div>
           <span class="status-pill" id="loginState">读取中</span>
@@ -76,10 +73,9 @@
         </button>
       </section>
 
-      <section class="panel schedule-panel reveal">
+      <section class="panel schedule-panel">
         <div class="section-heading">
           <div>
-            <p class="section-index">02 / SCHEDULE</p>
             <h2>每日任务</h2>
           </div>
           <label class="switch" title="启用每日自动兑换">
@@ -101,24 +97,17 @@
           <strong id="nextRun">未启用</strong>
           <p id="nextRunDate">开启每日任务后显示</p>
         </div>
-
-        <div class="schedule-facts">
-          <span><i data-lucide="calendar-check-2"></i> 每日去重</span>
-          <span><i data-lucide="shield-check"></i> 单次执行</span>
-          <span><i data-lucide="cookie"></i> Cookie 持久化</span>
-        </div>
       </section>
     </aside>
 
     <section class="column column-center">
-      <section class="mission-bar reveal">
+      <section class="mission-bar">
         <div class="mission-copy">
-          <p class="section-index">03 / REWARD QUEUE</p>
-          <h2>选择今日奖励</h2>
+          <h2>选择兑换奖励</h2>
           <p>活动规则：每个礼包每天仅可兑换一次。</p>
         </div>
         <div class="mission-selection">
-          <span>当前队列</span>
+          <span>已选内容</span>
           <strong id="selectedRewardName">读取中</strong>
           <span id="selectedRewardCost">-- 体验币</span>
         </div>
@@ -126,10 +115,9 @@
 
       <section class="reward-grid" id="rewardGrid" aria-label="奖励列表"></section>
 
-      <section class="panel activity-panel reveal">
+      <section class="panel activity-panel">
         <div class="section-heading">
           <div>
-            <p class="section-index">04 / ACTIVITY</p>
             <h2>执行记录</h2>
           </div>
           <button class="icon-button" id="refreshDashboardBtn" type="button" title="刷新记录">
@@ -146,16 +134,14 @@
     </section>
 
     <aside class="column column-right">
-      <section class="panel execute-panel reveal">
+      <section class="panel execute-panel">
         <div class="section-heading">
           <div>
-            <p class="section-index">05 / EXECUTE</p>
             <h2>立即兑换</h2>
           </div>
-          <span class="execution-mark" aria-hidden="true">RUN</span>
         </div>
         <div class="execute-summary">
-          <span>目标奖励</span>
+          <span>已选奖励</span>
           <strong id="executeRewardName">--</strong>
           <div class="cost-line">
             <span>体验币消耗</span>
@@ -169,10 +155,9 @@
         <p class="execute-note" id="todayResult">今天尚未执行</p>
       </section>
 
-      <section class="panel push-panel reveal">
+      <section class="panel push-panel">
         <div class="section-heading">
           <div>
-            <p class="section-index">06 / NOTIFY</p>
             <h2>推送通道</h2>
           </div>
           <span class="status-pill" id="channelCount">0 / 2</span>
@@ -257,7 +242,6 @@
   <dialog class="login-dialog" id="loginDialog">
     <div class="dialog-header">
       <div>
-        <p class="section-index">TARGET LOGIN</p>
         <h2>腾讯账号登录</h2>
       </div>
       <button class="icon-button" id="closeLoginBtn" type="button" title="关闭登录窗口">
@@ -290,7 +274,6 @@
   <dialog class="screenshot-dialog" id="screenshotDialog">
     <div class="dialog-header">
       <div>
-        <p class="section-index">EXECUTION PROOF</p>
         <h2>执行截图</h2>
       </div>
       <button class="icon-button" id="closeScreenshotBtn" type="button" title="关闭截图">

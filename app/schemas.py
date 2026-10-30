@@ -23,7 +23,8 @@ class SettingsPayload(BaseModel):
         pattern=r"^([01]\d|2[0-3]):[0-5]\d$",
     )
     auto_exchange: bool = False
-    reward_id: int = Field(default=1, ge=1, le=6)
+    reward_ids: list[int] = Field(default_factory=lambda: [1])
+    reward_id: int | None = Field(default=None, ge=1, le=6)
 
     onebot_enabled: bool = False
     onebot_base_url: str = Field(default="", max_length=2048)
@@ -41,6 +42,14 @@ class SettingsPayload(BaseModel):
     def strip_text(cls, value: str) -> str:
         return value.strip()
 
+    @field_validator("reward_ids")
+    @classmethod
+    def validate_reward_ids(cls, values: list[int]) -> list[int]:
+        normalized = list(dict.fromkeys(values))
+        if any(value < 1 or value > 6 for value in normalized):
+            raise ValueError("奖励编号必须在 1 到 6 之间")
+        return normalized
+
     @field_validator("onebot_base_url")
     @classmethod
     def valid_onebot_url(cls, value: str) -> str:
@@ -48,6 +57,15 @@ class SettingsPayload(BaseModel):
 
     @model_validator(mode="after")
     def validate_channels(self) -> "SettingsPayload":
+        if (
+            self.reward_id is not None
+            and "reward_ids" not in self.model_fields_set
+        ):
+            self.reward_ids = [self.reward_id]
+        if not self.reward_ids and self.reward_id is not None:
+            self.reward_ids = [self.reward_id]
+        if not self.reward_ids:
+            raise ValueError("请至少选择一项兑换奖励")
         if self.onebot_enabled:
             if not self.onebot_base_url or not self.onebot_target_id:
                 raise ValueError("启用 OneBot 前请填写服务地址和接收目标")

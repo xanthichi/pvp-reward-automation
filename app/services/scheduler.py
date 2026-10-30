@@ -61,11 +61,11 @@ class ExchangeScheduler:
 
         result: dict[str, Any] = {"executed": False}
         if self._due_today(settings, now):
-            exchange = self.runner.execute(trigger="schedule")
+            exchanges = self.runner.execute_batch(trigger="schedule")
             result = {
-                "executed": exchange.status != "skipped",
-                "status": exchange.status,
-                "message": exchange.message,
+                "executed": bool(exchanges),
+                "count": len(exchanges),
+                "statuses": [item.status for item in exchanges],
             }
 
         monitor_due = self._monitor_due(now)
@@ -83,11 +83,23 @@ class ExchangeScheduler:
         )
         if now.time() < time(hour=hour, minute=minute):
             return False
-        existing = self.db.query_one(
-            "SELECT id FROM exchange_logs WHERE run_date = ? LIMIT 1",
+        if (
+            self.db.get_runtime("daily_abort_date", "")
+            == now.date().isoformat()
+        ):
+            return False
+        rows = self.db.query_all(
+            """
+            SELECT DISTINCT reward_id FROM exchange_logs
+            WHERE run_date = ?
+            """,
             (now.date().isoformat(),),
         )
-        return existing is None
+        attempted = {int(row["reward_id"]) for row in rows}
+        return any(
+            reward_id not in attempted
+            for reward_id in settings["reward_ids"]
+        )
 
     def _monitor_due(self, now: datetime) -> bool:
         last_text = self.db.get_runtime("last_login_monitor")
@@ -118,11 +130,18 @@ def next_run_time(
         second=0,
         microsecond=0,
     )
-    existing = db.query_one(
-        "SELECT id FROM exchange_logs WHERE run_date = ? LIMIT 1",
+    attempted_rows = db.query_all(
+        """
+        SELECT DISTINCT reward_id FROM exchange_logs
+        WHERE run_date = ?
+        """,
         (candidate.date().isoformat(),),
     )
-    if candidate <= now or existing:
+    attempted = {int(row["reward_id"]) for row in attempted_rows}
+    all_attempted = all(
+        reward_id in attempted for reward_id in settings["reward_ids"]
+    )
+    if candidate <= now or all_attempted:
         candidate += timedelta(days=1)
     return candidate
 

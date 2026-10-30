@@ -33,9 +33,12 @@ class FakeBrowser:
             nickname="测试召唤师",
             checked_at="2026-10-30T10:00:00+08:00",
         )
+        self.results: list[BrowserResult] = []
 
     def execute_reward(self, reward_id: int) -> BrowserResult:
         self.execute_calls.append(reward_id)
+        if self.results:
+            return self.results.pop(0)
         return self.result
 
     def check_login(self) -> LoginStatus:

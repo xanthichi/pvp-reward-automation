@@ -106,11 +106,11 @@ def create_app(
             "SELECT * FROM exchange_logs ORDER BY id DESC LIMIT 20"
         )
         recent = [_exchange_public(row) for row in recent_rows]
-        today_log = db.query_one(
+        today_rows = db.query_all(
             """
             SELECT * FROM exchange_logs
             WHERE run_date = ?
-            ORDER BY id DESC LIMIT 1
+            ORDER BY id ASC
             """,
             (now.date().isoformat(),),
         )
@@ -127,7 +127,7 @@ def create_app(
             "timezone": settings["timezone"],
             "settings": public,
             "rewards": list(REWARDS),
-            "today": _exchange_public(today_log) if today_log else None,
+            "today": [_exchange_public(row) for row in today_rows],
             "recent": recent,
             "login": cached_login,
             "next_run": next_run.isoformat() if next_run else None,
@@ -229,10 +229,24 @@ def create_app(
 
     @app.post("/api/exchange")
     def exchange_now() -> dict[str, Any]:
-        result = runner.execute(trigger="manual")
+        results = runner.execute_batch(trigger="manual")
+        statuses = [item.status for item in results]
+        if not results:
+            summary = "今日所选奖励已经处理"
+        elif all(status == "success" for status in statuses):
+            summary = f"{len(results)} 项奖励兑换完成"
+        else:
+            summary = (
+                f"{sum(status == 'success' for status in statuses)}"
+                f"/{len(results)} 项成功"
+            )
         return {
-            "ok": result.status == "success",
-            "exchange": result.public(),
+            "ok": not results or all(
+                status == "success" for status in statuses
+            ),
+            "summary": summary,
+            "exchanges": [item.public() for item in results],
+            "exchange": results[0].public() if results else None,
         }
 
     @app.get("/api/exchanges/{log_id}/screenshot")

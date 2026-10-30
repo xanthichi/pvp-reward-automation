@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from typing import Any
 
@@ -16,6 +17,21 @@ def _row_dict(row: Any, cipher: SecretCipher) -> dict[str, Any]:
     result["pushplus_token"] = cipher.decrypt(
         str(result.get("pushplus_token", ""))
     )
+    try:
+        reward_ids = json.loads(str(result.get("reward_ids") or "[]"))
+    except json.JSONDecodeError:
+        reward_ids = []
+    if not isinstance(reward_ids, list):
+        reward_ids = []
+    normalized = []
+    for value in reward_ids:
+        try:
+            reward_id = int(value)
+        except (TypeError, ValueError):
+            continue
+        if 1 <= reward_id <= 6 and reward_id not in normalized:
+            normalized.append(reward_id)
+    result["reward_ids"] = normalized or [int(result["reward_id"])]
     return result
 
 
@@ -35,7 +51,8 @@ def get_public_settings(
         "scheduled_time": settings["scheduled_time"],
         "timezone": settings["timezone"],
         "auto_exchange": bool(settings["auto_exchange"]),
-        "reward_id": int(settings["reward_id"]),
+        "reward_ids": list(settings["reward_ids"]),
+        "reward_id": int(settings["reward_ids"][0]),
         "last_login_at": settings["last_login_at"],
         "last_login_nickname": settings["last_login_nickname"],
         "onebot": {
@@ -82,6 +99,7 @@ def save_settings(
             scheduled_time = ?,
             auto_exchange = ?,
             reward_id = ?,
+            reward_ids = ?,
             onebot_enabled = ?,
             onebot_base_url = ?,
             onebot_access_token = ?,
@@ -96,7 +114,8 @@ def save_settings(
             payload.account_label,
             payload.scheduled_time,
             int(payload.auto_exchange),
-            payload.reward_id,
+            payload.reward_ids[0],
+            json.dumps(payload.reward_ids),
             int(payload.onebot_enabled),
             payload.onebot_base_url,
             cipher.encrypt(onebot_token),

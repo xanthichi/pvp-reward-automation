@@ -30,7 +30,7 @@ def test_dashboard_and_settings_are_stored_without_plaintext_secrets(
                 "account_label": "体验服主号",
                 "scheduled_time": "09:30",
                 "auto_exchange": True,
-                "reward_id": 4,
+                "reward_ids": [2, 4, 5],
                 "onebot_enabled": True,
                 "onebot_base_url": "http://127.0.0.1:3000",
                 "onebot_access_token": "onebot-secret",
@@ -44,7 +44,8 @@ def test_dashboard_and_settings_are_stored_without_plaintext_secrets(
 
         public = client.get("/api/dashboard").json()["settings"]
         assert public["account_label"] == "体验服主号"
-        assert public["reward_id"] == 4
+        assert public["reward_ids"] == [2, 4, 5]
+        assert public["reward_id"] == 2
         assert public["pushplus"]["token_set"] is True
         assert public["onebot"]["access_token_set"] is True
 
@@ -66,14 +67,23 @@ def test_exchange_is_successful_and_not_repeated_same_day(
         disable_scheduler=True,
     )
     with TestClient(app) as client:
+        saved = client.put(
+            "/api/settings",
+            json={"reward_ids": [2, 4]},
+        )
+        assert saved.status_code == 200
         first = client.post("/api/exchange")
         second = client.post("/api/exchange")
 
     assert first.status_code == 200
-    assert first.json()["exchange"]["status"] == "success"
+    assert len(first.json()["exchanges"]) == 2
+    assert all(
+        item["status"] == "success"
+        for item in first.json()["exchanges"]
+    )
     assert second.status_code == 200
-    assert second.json()["exchange"]["status"] == "success"
-    assert fake_browser.execute_calls == [1]
+    assert second.json()["exchanges"] == []
+    assert fake_browser.execute_calls == [2, 4]
 
 
 def test_login_and_settings_validation(

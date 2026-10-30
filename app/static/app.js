@@ -152,16 +152,15 @@ function fillSettings() {
 
 function renderRewards() {
   const rewards = state.dashboard?.rewards || [];
-  const selectedId = state.dashboard?.settings?.reward_id || 1;
+  const selectedIds = getSelectedRewardIds();
   $("#rewardGrid").innerHTML = rewards
     .map(
-      (reward, index) => `
+      (reward) => `
         <button
-          class="reward-card reveal ${reward.id === selectedId ? "is-selected" : ""}"
+          class="reward-card ${selectedIds.includes(reward.id) ? "is-selected" : ""}"
           type="button"
           data-reward-id="${reward.id}"
-          aria-pressed="${reward.id === selectedId}"
-          style="animation-delay:${35 + index * 28}ms"
+          aria-pressed="${selectedIds.includes(reward.id)}"
         >
           <span class="reward-visual">
             <img src="${escapeAttr(reward.image)}" alt="" loading="lazy">
@@ -215,12 +214,16 @@ function renderLoginState() {
 }
 
 function renderSelection() {
-  const selected = currentReward();
-  if (!selected) return;
-  $("#selectedRewardName").textContent = selected.name;
-  $("#selectedRewardCost").textContent = `${selected.cost} 体验币`;
-  $("#executeRewardName").textContent = selected.name;
-  $("#executeRewardCost").textContent = `${selected.cost} 体验币`;
+  const selected = getSelectedRewards();
+  if (!selected.length) return;
+  const totalCost = selected.reduce((sum, item) => sum + item.cost, 0);
+  const names = selected.map((item) => item.name);
+  $("#selectedRewardName").textContent =
+    names.length <= 2 ? names.join(" · ") : `${names[0]} 等 ${names.length} 项`;
+  $("#selectedRewardCost").textContent = `${totalCost} 体验币`;
+  $("#executeRewardName").textContent =
+    names.length <= 2 ? names.join(" · ") : `${names.length} 项奖励`;
+  $("#executeRewardCost").textContent = `${totalCost} 体验币`;
 }
 
 function renderSchedule() {
@@ -299,23 +302,55 @@ function renderPushState() {
 }
 
 function renderTodayResult() {
-  const today = state.dashboard?.today;
+  const today = state.dashboard?.today || [];
   const element = $("#todayResult");
-  if (!today) {
+  if (!today.length) {
     element.textContent = "今天尚未执行";
     return;
   }
-  element.textContent = `${activityVisual(today.status).label} · ${formatDateTime(today.created_at)}`;
+  const selectedCount = getSelectedRewardIds().length;
+  const selectedToday = today.filter((item) =>
+    getSelectedRewardIds().includes(item.reward_id),
+  );
+  const successCount = selectedToday.filter(
+    (item) => item.status === "success",
+  ).length;
+  const latest = today[today.length - 1];
+  element.textContent =
+    `今日已处理 ${selectedToday.length}/${selectedCount}` +
+    ` · 成功 ${successCount} · ${formatDateTime(latest.created_at)}`;
 }
 
-function currentReward() {
-  const id = state.dashboard?.settings?.reward_id || 1;
-  return (state.dashboard?.rewards || []).find((item) => item.id === id);
+function getSelectedRewardIds() {
+  const ids = state.dashboard?.settings?.reward_ids;
+  if (Array.isArray(ids) && ids.length) {
+    return ids.map(Number);
+  }
+  return [Number(state.dashboard?.settings?.reward_id || 1)];
+}
+
+function getSelectedRewards() {
+  const ids = getSelectedRewardIds();
+  return (state.dashboard?.rewards || []).filter((item) =>
+    ids.includes(item.id),
+  );
 }
 
 async function selectReward(rewardId) {
   if (!state.dashboard) return;
-  state.dashboard.settings.reward_id = rewardId;
+  const selected = new Set(getSelectedRewardIds());
+  if (selected.has(rewardId)) {
+    if (selected.size === 1) {
+      toast("至少保留一项", "请至少选择一项兑换奖励。", "warning");
+      return;
+    }
+    selected.delete(rewardId);
+  } else {
+    selected.add(rewardId);
+  }
+  const rewardIds = [...selected].sort((left, right) => left - right);
+  state.dashboard.settings.reward_ids = rewardIds;
+  state.dashboard.settings.reward_id = rewardIds[0];
   renderRewards();
   renderSelection();
   renderIcons();
@@ -335,12 +370,12 @@ function updateSaveState(dirty) {
 
 async function saveSettings({ silent = false } = {}) {
   if (state.busy) return false;
-  const selected = state.dashboard?.settings?.reward_id || 1;
+  const selected = getSelectedRewardIds();
   const payload = {
     account_label: $("#accountLabel").value.trim(),
     scheduled_time: $("#scheduledTime").value || "10:05",
     auto_exchange: $("#autoExchange").checked,
-    reward_id: selected,
+    reward_ids: selected,
     onebot_enabled: $("#onebotEnabled").checked,
     onebot_base_url: $("#onebotBaseUrl").value.trim(),
     onebot_access_token: $("#onebotToken").value,
@@ -540,10 +575,12 @@ function renderLoginStateFromStatus(login) {
 
 async function executeExchange() {
   if (state.busy) return;
-  const reward = currentReward();
-  if (!reward) return;
+  const rewards = getSelectedRewards();
+  if (!rewards.length) return;
+  const names = rewards.map((item) => item.name).join("、");
   const confirmed = window.confirm(
-    `立即兑换「${reward.name}」？\n活动限制每个礼包每天一次。`,
+    `立即兑换以下 ${rewards.length} 项奖励？\n${names}\n\n` +
+      "活动限制每个礼包每天一次。",
   );
   if (!confirmed) return;
   const button = $("#exchangeBtn");
@@ -553,20 +590,17 @@ async function executeExchange() {
       method: "POST",
       body: "{}",
     });
-    const result = data.exchange;
-    if (result.status === "success") {
-      toast(
-        "兑换完成",
-        result.package_name
-          ? `获得 ${result.package_name}`
-          : result.message,
-      );
-    } else if (result.status === "login_expired") {
-      toast("登录已过期", result.message, "warning", 6000);
+    const results = data.exchanges || [];
+    if (!results.length) {
+      toast("无需重复执行", data.summary);
+    } else if (data.ok) {
+      toast("兑换完成", data.summary);
+    } else if (results.some((item) => item.status === "login_expired")) {
+      toast("登录已过期", data.summary, "warning", 6000);
       openLogin("qq");
     } else {
-      toast("兑换未完成", result.message, "error", 6000);
-      if (result.status === "needs_binding") {
+      toast("兑换未完成", data.summary, "error", 6000);
+      if (results.some((item) => item.status === "needs_binding")) {
         toast(
           "需要绑定正式服",
           "打开完整窗口完成正式服角色绑定后再执行。",
@@ -708,7 +742,6 @@ function toast(title, message, type = "success", duration = 4200) {
   renderIcons();
   window.setTimeout(() => {
     element.style.opacity = "0";
-    element.style.transform = "translateY(4px)";
     window.setTimeout(() => element.remove(), 180);
   }, duration);
 }

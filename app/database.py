@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS settings (
     timezone TEXT NOT NULL DEFAULT 'Asia/Shanghai',
     auto_exchange INTEGER NOT NULL DEFAULT 0,
     reward_id INTEGER NOT NULL DEFAULT 1,
+    reward_ids TEXT NOT NULL DEFAULT '[1]',
     onebot_enabled INTEGER NOT NULL DEFAULT 0,
     onebot_base_url TEXT NOT NULL DEFAULT '',
     onebot_access_token TEXT NOT NULL DEFAULT '',
@@ -74,6 +75,7 @@ class Database:
     def initialize(self) -> None:
         with self._lock, self.connect() as connection:
             connection.executescript(SCHEMA)
+            self._migrate(connection)
             exists = connection.execute(
                 "SELECT id FROM settings WHERE id = 1"
             ).fetchone()
@@ -86,6 +88,25 @@ class Database:
                     """,
                     (now, now),
                 )
+
+    @staticmethod
+    def _migrate(connection: sqlite3.Connection) -> None:
+        columns = {
+            str(row["name"])
+            for row in connection.execute("PRAGMA table_info(settings)")
+        }
+        if "reward_ids" not in columns:
+            connection.execute(
+                "ALTER TABLE settings "
+                "ADD COLUMN reward_ids TEXT NOT NULL DEFAULT '[1]'"
+            )
+            connection.execute(
+                """
+                UPDATE settings
+                SET reward_ids = '[' || reward_id || ']'
+                WHERE id = 1
+                """
+            )
 
     def query_one(
         self, sql: str, params: Iterable[Any] = ()

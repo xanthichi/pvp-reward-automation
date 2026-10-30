@@ -74,102 +74,164 @@ class ExchangeRunner:
         reward_id: int | None = None,
         notify: bool = True,
     ) -> ExchangeResult:
+        results = self.execute_batch(
+            trigger=trigger,
+            reward_ids=[reward_id] if reward_id is not None else None,
+            notify=notify,
+        )
+        if results:
+            return results[0]
+        settings = get_settings(self.db, self.cipher)
+        selected_id = int(reward_id or settings["reward_ids"][0])
+        row = self.db.query_one(
+            """
+            SELECT * FROM exchange_logs
+            WHERE run_date = ? AND reward_id = ?
+            ORDER BY id DESC LIMIT 1
+            """,
+            (datetime.now(ZoneInfo(settings["timezone"])).date().isoformat(), selected_id),
+        )
+        if row:
+            return self._result_from_row(row)
+        reward = get_reward(selected_id)
+        return ExchangeResult(
+            status="skipped",
+            message="该奖励今日已经处理",
+            reward_id=selected_id,
+            reward_name=str(reward["name"]),
+            trigger=trigger,
+        )
+
+    def execute_batch(
+        self,
+        *,
+        trigger: str,
+        reward_ids: list[int] | None = None,
+        notify: bool = True,
+    ) -> list[ExchangeResult]:
         with self._exchange_lock:
             settings = get_settings(self.db, self.cipher)
             timezone = ZoneInfo(settings["timezone"])
             now = datetime.now(timezone)
             run_date = now.date().isoformat()
-            selected_id = int(reward_id or settings["reward_id"])
-            reward = get_reward(selected_id)
+            selected_ids = list(dict.fromkeys(
+                reward_ids if reward_ids is not None else settings["reward_ids"]
+            ))
+            results: list[ExchangeResult] = []
+            abort_daily_run = False
 
-            existing = self._today_logs(run_date)
-            if existing and trigger == "schedule":
-                return self._result_from_row(existing[-1])
-            if existing and any(row["status"] == "success" for row in existing):
-                return self._result_from_row(existing[-1])
+            for selected_id in selected_ids:
+                existing = self._today_logs(run_date, selected_id)
+                if existing and trigger == "schedule":
+                    continue
+                if existing and any(
+                    row["status"] == "success" for row in existing
+                ):
+                    continue
 
-            try:
-                browser_result = self.browser.execute_reward(selected_id)
-            except Exception as exc:
-                browser_result = BrowserResult(
-                    status="failed",
-                    message=f"浏览器执行异常：{exc}",
-                    detail=json.dumps(
-                        {"error": str(exc)},
-                        ensure_ascii=False,
+                reward = get_reward(selected_id)
+                try:
+                    browser_result = self.browser.execute_reward(selected_id)
+                except Exception as exc:
+                    browser_result = BrowserResult(
+                        status="failed",
+                        message=f"浏览器执行异常：{exc}",
+                        detail=json.dumps(
+                            {"error": str(exc)},
+                            ensure_ascii=False,
+                        ),
+                    )
+
+                if (
+                    browser_result.login_status
+                    and browser_result.login_status.authenticated
+                ):
+                    mark_login(
+                        self.db,
+                        nickname=browser_result.login_status.nickname,
+                        checked_at=now.isoformat(),
+                    )
+                    self.db.set_runtime(
+                        "last_login_state",
+                        browser_result.login_status.state,
+                    )
+                    self.db.set_runtime("login_expired_notified", "0")
+                elif browser_result.status == "login_expired":
+                    self.db.set_runtime("last_login_state", "login_required")
+
+                created_at = now.isoformat()
+                log_id = self.db.execute(
+                    """
+                    INSERT INTO exchange_logs (
+                        run_date, reward_id, reward_name, trigger, status,
+                        message, package_name, detail, screenshot_path,
+                        channels, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', ?)
+                    """,
+                    (
+                        run_date,
+                        selected_id,
+                        str(reward["name"]),
+                        trigger,
+                        browser_result.status,
+                        browser_result.message,
+                        browser_result.package_name,
+                        browser_result.detail[:20_000],
+                        browser_result.screenshot_path,
+                        created_at,
                     ),
                 )
-
-            if (
-                browser_result.login_status
-                and browser_result.login_status.authenticated
-            ):
-                mark_login(
-                    self.db,
-                    nickname=browser_result.login_status.nickname,
-                    checked_at=now.isoformat(),
+                results.append(
+                    ExchangeResult(
+                        status=browser_result.status,
+                        message=browser_result.message,
+                        reward_id=selected_id,
+                        reward_name=str(reward["name"]),
+                        trigger=trigger,
+                        package_name=browser_result.package_name,
+                        detail=browser_result.detail,
+                        screenshot_path=browser_result.screenshot_path,
+                        log_id=log_id,
+                        created_at=created_at,
+                    )
                 )
-                self.db.set_runtime("last_login_state", "authenticated")
-                self.db.set_runtime("login_expired_notified", "0")
-            elif browser_result.status == "login_expired":
-                self.db.set_runtime("last_login_state", "login_required")
+                if browser_result.status in {
+                    "login_expired",
+                    "needs_binding",
+                }:
+                    abort_daily_run = True
+                    break
 
-            channels: list[PushResult] = []
-            if notify:
-                title, content = _notification(
-                    settings,
-                    reward,
-                    browser_result,
-                    now,
-                )
+            if abort_daily_run:
+                self.db.set_runtime("daily_abort_date", run_date)
+            elif results:
+                self.db.set_runtime("daily_abort_date", "")
+
+            if results and notify:
+                title, content = _batch_notification(settings, results, now)
                 channels = send_notifications(settings, title, content)
-                if browser_result.status == "login_expired":
+                channel_payload = [
+                    {
+                        "provider": item.provider,
+                        "ok": item.ok,
+                        "detail": item.detail,
+                    }
+                    for item in channels
+                ]
+                for result in results:
+                    result.channels = channel_payload
+                    self.db.execute(
+                        "UPDATE exchange_logs SET channels = ? WHERE id = ?",
+                        (
+                            json.dumps(channel_payload, ensure_ascii=False),
+                            result.log_id,
+                        ),
+                    )
+                if any(
+                    result.status == "login_expired" for result in results
+                ):
                     self.db.set_runtime("login_expired_notified", "1")
-
-            channel_payload = [
-                {
-                    "provider": item.provider,
-                    "ok": item.ok,
-                    "detail": item.detail,
-                }
-                for item in channels
-            ]
-            created_at = now.isoformat()
-            log_id = self.db.execute(
-                """
-                INSERT INTO exchange_logs (
-                    run_date, reward_id, reward_name, trigger, status,
-                    message, package_name, detail, screenshot_path,
-                    channels, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    run_date,
-                    selected_id,
-                    str(reward["name"]),
-                    trigger,
-                    browser_result.status,
-                    browser_result.message,
-                    browser_result.package_name,
-                    browser_result.detail[:20_000],
-                    browser_result.screenshot_path,
-                    json.dumps(channel_payload, ensure_ascii=False),
-                    created_at,
-                ),
-            )
-            return ExchangeResult(
-                status=browser_result.status,
-                message=browser_result.message,
-                reward_id=selected_id,
-                reward_name=str(reward["name"]),
-                trigger=trigger,
-                package_name=browser_result.package_name,
-                detail=browser_result.detail,
-                screenshot_path=browser_result.screenshot_path,
-                log_id=log_id,
-                created_at=created_at,
-                channels=channel_payload,
-            )
+            return results
 
     def check_login(self, *, notify: bool = True) -> LoginStatus:
         with self._login_lock:
@@ -221,14 +283,27 @@ class ExchangeRunner:
                 self.db.set_runtime("login_expired_notified", "1")
             return status
 
-    def _today_logs(self, run_date: str) -> list[Any]:
+    def _today_logs(
+        self,
+        run_date: str,
+        reward_id: int | None = None,
+    ) -> list[Any]:
+        if reward_id is None:
+            return self.db.query_all(
+                """
+                SELECT * FROM exchange_logs
+                WHERE run_date = ?
+                ORDER BY id ASC
+                """,
+                (run_date,),
+            )
         return self.db.query_all(
             """
             SELECT * FROM exchange_logs
-            WHERE run_date = ?
+            WHERE run_date = ? AND reward_id = ?
             ORDER BY id ASC
             """,
-            (run_date,),
+            (run_date, reward_id),
         )
 
     def _result_from_row(self, row: Any) -> ExchangeResult:
@@ -264,58 +339,39 @@ class ExchangeRunner:
         return path
 
 
-def _notification(
+def _batch_notification(
     settings: dict[str, Any],
-    reward: dict[str, Any],
-    result: BrowserResult,
+    results: list[ExchangeResult],
     now: datetime,
 ) -> tuple[str, str]:
     account = settings["account_label"] or "默认账号"
     stamp = now.strftime("%Y-%m-%d %H:%M:%S")
-    package = (
-        f"\n获得：{result.package_name}"
-        if result.package_name
-        else ""
-    )
-    if result.status == "success":
-        title = f"兑换成功 · {reward['name']}"
-        body = "\n".join(
-            [
-                f"账号：{account}",
-                f"奖励：{reward['name']}（{reward['cost']} 体验币）",
-                f"结果：{result.message}",
-                f"时间：{stamp}",
-            ]
-        )
-        return title, body + package
-    if result.status == "login_expired":
+    successful = sum(item.status == "success" for item in results)
+    if successful == len(results):
+        title = f"兑换完成 · {successful} 项"
+    elif any(item.status == "login_expired" for item in results):
         title = "王者奖励兑换 · 登录已过期"
-        return title, "\n".join(
-            [
-                f"账号：{account}",
-                "状态：登录态已失效，本次兑换未执行。",
-                f"时间：{stamp}",
-                "",
-                "请打开管理台，点击“重新登录”并完成扫码。",
-            ]
-        )
-    if result.status == "needs_binding":
+    elif any(item.status == "needs_binding" for item in results):
         title = "兑换失败 · 尚未绑定正式服"
-        return title, "\n".join(
+    else:
+        title = f"兑换结果 · {successful}/{len(results)} 项成功"
+
+    lines = [
+        f"账号：{account}",
+        f"时间：{stamp}",
+        "",
+    ]
+    for item in results:
+        package = f"，获得 {item.package_name}" if item.package_name else ""
+        lines.append(
+            f"- {item.reward_name}：{item.message}{package}"
+        )
+    if any(item.status == "login_expired" for item in results):
+        lines.extend(
             [
-                f"账号：{account}",
-                f"奖励：{reward['name']}",
-                f"结果：{result.message}",
-                f"时间：{stamp}",
+                "",
+                "登录态已失效，请打开管理台重新扫码。",
             ]
         )
-    title = f"兑换失败 · {reward['name']}"
-    return title, "\n".join(
-        [
-            f"账号：{account}",
-            f"奖励：{reward['name']}（{reward['cost']} 体验币）",
-            f"结果：{result.message}",
-            f"时间：{stamp}",
-        ]
-    )
+    return title, "\n".join(lines)
 
