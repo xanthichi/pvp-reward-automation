@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>体验币自动兑换</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div class="grid-noise" aria-hidden="true"></div>
+
+  <header class="topbar">
+    <div class="brand-lockup">
+      <div class="brand-mark" aria-hidden="true">
+        <i data-lucide="swords"></i>
+      </div>
+      <div>
+        <p class="eyebrow">PVP DAILY OPS</p>
+        <h1>体验币自动兑换</h1>
+      </div>
+    </div>
+    <div class="topbar-actions">
+      <div class="server-clock">
+        <span class="live-dot" id="liveDot"></span>
+        <div>
+          <span class="clock-label">服务器时间</span>
+          <time id="serverClock">--:--:--</time>
+        </div>
+      </div>
+      <button class="button button-primary" id="saveSettingsBtn" type="button">
+        <i data-lucide="save"></i>
+        <span>保存配置</span>
+      </button>
+    </div>
+  </header>
+
+  <main class="dashboard">
+    <aside class="column column-left">
+      <section class="panel account-panel reveal">
+        <div class="section-heading">
+          <div>
+            <p class="section-index">01 / ACCOUNT</p>
+            <h2>游戏账号</h2>
+          </div>
+          <span class="status-pill" id="loginState">读取中</span>
+        </div>
+
+        <label class="field">
+          <span>账号备注</span>
+          <input id="accountLabel" type="text" maxlength="80" placeholder="例如：体验服主号">
+        </label>
+
+        <div class="identity-line">
+          <span class="identity-icon"><i data-lucide="user-round"></i></span>
+          <div>
+            <strong id="nickname">尚未登录</strong>
+            <span id="partition">目标页扫码后自动保存 Cookie</span>
+          </div>
+        </div>
+
+        <div class="button-row">
+          <button class="button button-accent" id="loginBtn" type="button">
+            <i data-lucide="qr-code"></i>
+            <span>扫码登录</span>
+          </button>
+          <button class="button button-secondary" id="visibleBrowserBtn" type="button" title="用于正式服角色绑定或处理异常登录">
+            <i data-lucide="monitor-up"></i>
+            <span>完整窗口</span>
+          </button>
+        </div>
+
+        <button class="text-button" id="checkLoginBtn" type="button">
+          <i data-lucide="refresh-cw"></i>
+          <span>检查登录状态</span>
+        </button>
+      </section>
+
+      <section class="panel schedule-panel reveal">
+        <div class="section-heading">
+          <div>
+            <p class="section-index">02 / SCHEDULE</p>
+            <h2>每日任务</h2>
+          </div>
+          <label class="switch" title="启用每日自动兑换">
+            <input id="autoExchange" type="checkbox">
+            <span class="switch-track"><span></span></span>
+          </label>
+        </div>
+
+        <label class="field">
+          <span>执行时间</span>
+          <input id="scheduledTime" type="time" step="60">
+        </label>
+
+        <div class="timeline-block">
+          <div class="timeline-label">
+            <span>下一次执行</span>
+            <i data-lucide="timer-reset"></i>
+          </div>
+          <strong id="nextRun">未启用</strong>
+          <p id="nextRunDate">开启每日任务后显示</p>
+        </div>
+
+        <div class="schedule-facts">
+          <span><i data-lucide="calendar-check-2"></i> 每日去重</span>
+          <span><i data-lucide="shield-check"></i> 单次执行</span>
+          <span><i data-lucide="cookie"></i> Cookie 持久化</span>
+        </div>
+      </section>
+    </aside>
+
+    <section class="column column-center">
+      <section class="mission-bar reveal">
+        <div class="mission-copy">
+          <p class="section-index">03 / REWARD QUEUE</p>
+          <h2>选择今日奖励</h2>
+          <p>活动规则：每个礼包每天仅可兑换一次。</p>
+        </div>
+        <div class="mission-selection">
+          <span>当前队列</span>
+          <strong id="selectedRewardName">读取中</strong>
+          <span id="selectedRewardCost">-- 体验币</span>
+        </div>
+      </section>
+
+      <section class="reward-grid" id="rewardGrid" aria-label="奖励列表"></section>
+
+      <section class="panel activity-panel reveal">
+        <div class="section-heading">
+          <div>
+            <p class="section-index">04 / ACTIVITY</p>
+            <h2>执行记录</h2>
+          </div>
+          <button class="icon-button" id="refreshDashboardBtn" type="button" title="刷新记录">
+            <i data-lucide="refresh-ccw"></i>
+          </button>
+        </div>
+        <div class="activity-list" id="activityList">
+          <div class="empty-state">
+            <i data-lucide="history"></i>
+            <p>暂无执行记录</p>
+          </div>
+        </div>
+      </section>
+    </section>
+
+    <aside class="column column-right">
+      <section class="panel execute-panel reveal">
+        <div class="section-heading">
+          <div>
+            <p class="section-index">05 / EXECUTE</p>
+            <h2>立即兑换</h2>
+          </div>
+          <span class="execution-mark" aria-hidden="true">RUN</span>
+        </div>
+        <div class="execute-summary">
+          <span>目标奖励</span>
+          <strong id="executeRewardName">--</strong>
+          <div class="cost-line">
+            <span>体验币消耗</span>
+            <b id="executeRewardCost">--</b>
+          </div>
+        </div>
+        <button class="button button-execute" id="exchangeBtn" type="button">
+          <i data-lucide="zap"></i>
+          <span>执行今日兑换</span>
+        </button>
+        <p class="execute-note" id="todayResult">今天尚未执行</p>
+      </section>
+
+      <section class="panel push-panel reveal">
+        <div class="section-heading">
+          <div>
+            <p class="section-index">06 / NOTIFY</p>
+            <h2>推送通道</h2>
+          </div>
+          <span class="status-pill" id="channelCount">0 / 2</span>
+        </div>
+
+        <div class="channel-block">
+          <div class="channel-heading">
+            <div class="channel-title">
+              <span class="channel-icon pushplus-icon">P+</span>
+              <div>
+                <strong>PushPlus</strong>
+                <span>微信公众号推送</span>
+              </div>
+            </div>
+            <label class="switch switch-small" title="启用 PushPlus">
+              <input id="pushplusEnabled" type="checkbox">
+              <span class="switch-track"><span></span></span>
+            </label>
+          </div>
+          <label class="field compact">
+            <span>Token</span>
+            <input id="pushplusToken" type="password" autocomplete="off" placeholder="留空则保留已保存 Token">
+          </label>
+          <div class="channel-actions">
+            <span class="secret-state" id="pushplusSecretState">未配置</span>
+            <button class="text-button test-push" data-provider="pushplus" type="button">
+              <i data-lucide="send"></i>
+              <span>测试</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="channel-divider"></div>
+
+        <div class="channel-block">
+          <div class="channel-heading">
+            <div class="channel-title">
+              <span class="channel-icon onebot-icon">OB</span>
+              <div>
+                <strong>OneBot v11</strong>
+                <span>私聊或群聊推送</span>
+              </div>
+            </div>
+            <label class="switch switch-small" title="启用 OneBot">
+              <input id="onebotEnabled" type="checkbox">
+              <span class="switch-track"><span></span></span>
+            </label>
+          </div>
+          <label class="field compact">
+            <span>HTTP API</span>
+            <input id="onebotBaseUrl" type="url" placeholder="http://127.0.0.1:3000">
+          </label>
+          <div class="field-grid">
+            <label class="field compact">
+              <span>目标类型</span>
+              <select id="onebotTargetType">
+                <option value="private">私聊</option>
+                <option value="group">群聊</option>
+              </select>
+            </label>
+            <label class="field compact">
+              <span>QQ / 群号</span>
+              <input id="onebotTargetId" type="text" inputmode="numeric" placeholder="接收目标">
+            </label>
+          </div>
+          <label class="field compact">
+            <span>Access Token</span>
+            <input id="onebotToken" type="password" autocomplete="off" placeholder="可选，留空保留">
+          </label>
+          <div class="channel-actions">
+            <span class="secret-state" id="onebotSecretState">未配置</span>
+            <button class="text-button test-push" data-provider="onebot" type="button">
+              <i data-lucide="send"></i>
+              <span>测试</span>
+            </button>
+          </div>
+        </div>
+      </section>
+    </aside>
+  </main>
+
+  <dialog class="login-dialog" id="loginDialog">
+    <div class="dialog-header">
+      <div>
+        <p class="section-index">TARGET LOGIN</p>
+        <h2>腾讯账号登录</h2>
+      </div>
+      <button class="icon-button" id="closeLoginBtn" type="button" title="关闭登录窗口">
+        <i data-lucide="x"></i>
+      </button>
+    </div>
+    <div class="login-toolbar">
+      <div class="segmented" role="group" aria-label="登录方式">
+        <button class="segment active" data-platform="qq" type="button">QQ</button>
+        <button class="segment" data-platform="wechat" type="button">微信</button>
+      </div>
+      <span class="login-live"><span class="live-dot"></span><span id="loginPollLabel">等待扫码</span></span>
+    </div>
+    <div class="login-frame">
+      <img id="loginScreenshot" alt="腾讯账号登录二维码">
+      <div class="login-frame-loading" id="loginLoading">
+        <i data-lucide="loader-circle"></i>
+        <span>正在连接目标页</span>
+      </div>
+    </div>
+    <div class="dialog-footer">
+      <p id="loginHint">使用手机 QQ 或微信扫描二维码。登录成功后 Cookie 会自动保存。</p>
+      <button class="button button-secondary" id="visibleFromDialogBtn" type="button">
+        <i data-lucide="monitor-up"></i>
+        <span>打开完整窗口</span>
+      </button>
+    </div>
+  </dialog>
+
+  <dialog class="screenshot-dialog" id="screenshotDialog">
+    <div class="dialog-header">
+      <div>
+        <p class="section-index">EXECUTION PROOF</p>
+        <h2>执行截图</h2>
+      </div>
+      <button class="icon-button" id="closeScreenshotBtn" type="button" title="关闭截图">
+        <i data-lucide="x"></i>
+      </button>
+    </div>
+    <img id="executionScreenshot" alt="兑换执行截图">
+  </dialog>
+
+  <div class="toast-region" id="toastRegion" aria-live="polite"></div>
+
+  <script src="/static/vendor/lucide.min.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>
+
