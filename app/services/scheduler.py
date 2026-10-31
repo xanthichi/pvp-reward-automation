@@ -69,7 +69,15 @@ class ExchangeScheduler:
             }
 
         monitor_due = self._monitor_due(now)
-        if settings["auto_exchange"] and monitor_due:
+        should_monitor_login = bool(
+            settings["auto_exchange"]
+            or (
+                settings["qq_auto_login"]
+                and settings["qq_username"]
+                and settings["qq_password"]
+            )
+        )
+        if should_monitor_login and monitor_due:
             status = self.runner.check_login(notify=True)
             self.db.set_runtime("last_login_monitor", now.isoformat())
             result["login_state"] = status.state

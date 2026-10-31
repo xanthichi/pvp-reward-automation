@@ -13,6 +13,7 @@ class FakeBrowser:
         self.artifact_root = data_dir / "artifacts"
         self.artifact_root.mkdir(parents=True, exist_ok=True)
         self.execute_calls: list[int] = []
+        self.credential_login_calls: list[tuple[str, str]] = []
         self.close_count = 0
         self.result = BrowserResult(
             status="success",
@@ -34,6 +35,13 @@ class FakeBrowser:
             checked_at="2026-10-30T10:00:00+08:00",
         )
         self.results: list[BrowserResult] = []
+        self.credential_login_status = LoginStatus(
+            state="logged_in",
+            authenticated=True,
+            bound=True,
+            nickname="测试召唤师",
+            checked_at="2026-10-30T10:00:00+08:00",
+        )
 
     def execute_reward(self, reward_id: int) -> BrowserResult:
         self.execute_calls.append(reward_id)
@@ -43,6 +51,14 @@ class FakeBrowser:
 
     def check_login(self) -> LoginStatus:
         return self.login_status
+
+    def login_with_credentials(
+        self,
+        username: str,
+        password: str,
+    ) -> LoginStatus:
+        self.credential_login_calls.append((username, password))
+        return self.credential_login_status
 
     def open_login(self, platform: str = "qq") -> LoginStatus:
         return self.login_status

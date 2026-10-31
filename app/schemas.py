@@ -3,7 +3,13 @@ from __future__ import annotations
 from typing import Literal
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    SecretStr,
+    field_validator,
+    model_validator,
+)
 
 
 def _validate_http_url(value: str, *, allow_empty: bool = True) -> str:
@@ -26,6 +32,11 @@ class SettingsPayload(BaseModel):
     reward_ids: list[int] = Field(default_factory=lambda: [1])
     reward_id: int | None = Field(default=None, ge=1, le=6)
 
+    qq_username: str = Field(default="", max_length=255)
+    qq_password: SecretStr = Field(default_factory=lambda: SecretStr(""))
+    qq_auto_login: bool = True
+    clear_qq_credentials: bool = False
+
     onebot_enabled: bool = False
     onebot_base_url: str = Field(default="", max_length=2048)
     onebot_access_token: str = Field(default="", max_length=2048)
@@ -37,7 +48,7 @@ class SettingsPayload(BaseModel):
     pushplus_token: str = Field(default="", max_length=2048)
     clear_pushplus_token: bool = False
 
-    @field_validator("account_label", "onebot_target_id")
+    @field_validator("account_label", "onebot_target_id", "qq_username")
     @classmethod
     def strip_text(cls, value: str) -> str:
         return value.strip()
@@ -49,6 +60,13 @@ class SettingsPayload(BaseModel):
         if any(value < 1 or value > 6 for value in normalized):
             raise ValueError("奖励编号必须在 1 到 6 之间")
         return normalized
+
+    @field_validator("qq_password")
+    @classmethod
+    def validate_qq_password(cls, value: SecretStr) -> SecretStr:
+        if len(value.get_secret_value()) > 512:
+            raise ValueError("QQ 密码长度不能超过 512 个字符")
+        return value
 
     @field_validator("onebot_base_url")
     @classmethod

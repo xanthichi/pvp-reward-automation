@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import threading
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -143,20 +143,54 @@ class ExchangeRunner:
                     )
 
                 if (
+                    browser_result.status == "login_expired"
+                    and _auto_login_enabled(settings)
+                ):
+                    auto_status = self._perform_auto_login(settings)
+                    if auto_status.authenticated:
+                        self._record_login_success(auto_status, now)
+                        try:
+                            browser_result = self.browser.execute_reward(
+                                selected_id
+                            )
+                        except Exception as exc:
+                            browser_result = BrowserResult(
+                                status="failed",
+                                message=f"浏览器执行异常：{exc}",
+                                detail=json.dumps(
+                                    {"error": str(exc)},
+                                    ensure_ascii=False,
+                                ),
+                            )
+                    else:
+                        self._remember_auto_login_failure(
+                            auto_status,
+                            now,
+                        )
+                        browser_result = BrowserResult(
+                            status="auto_login_failed",
+                            message=auto_status.message,
+                            detail=json.dumps(
+                                {
+                                    "auto_login": auto_status.raw,
+                                },
+                                ensure_ascii=False,
+                            ),
+                            login_status=auto_status,
+                        )
+
+                if (
                     browser_result.login_status
                     and browser_result.login_status.authenticated
                 ):
-                    mark_login(
-                        self.db,
-                        nickname=browser_result.login_status.nickname,
-                        checked_at=now.isoformat(),
+                    self._record_login_success(
+                        browser_result.login_status,
+                        now,
                     )
-                    self.db.set_runtime(
-                        "last_login_state",
-                        browser_result.login_status.state,
-                    )
-                    self.db.set_runtime("login_expired_notified", "0")
-                elif browser_result.status == "login_expired":
+                elif browser_result.status in {
+                    "login_expired",
+                    "auto_login_failed",
+                }:
                     self.db.set_runtime("last_login_state", "login_required")
 
                 created_at = now.isoformat()
@@ -197,6 +231,7 @@ class ExchangeRunner:
                 )
                 if browser_result.status in {
                     "login_expired",
+                    "auto_login_failed",
                     "needs_binding",
                 }:
                     abort_daily_run = True
@@ -228,9 +263,23 @@ class ExchangeRunner:
                         ),
                     )
                 if any(
-                    result.status == "login_expired" for result in results
+                    result.status in {
+                        "login_expired",
+                        "auto_login_failed",
+                    }
+                    for result in results
                 ):
                     self.db.set_runtime("login_expired_notified", "1")
+                auto_failures = [
+                    result
+                    for result in results
+                    if result.status == "auto_login_failed"
+                ]
+                if auto_failures:
+                    self.db.set_runtime(
+                        "auto_login_failed_notified",
+                        f"{run_date}|{auto_failures[0].message}",
+                    )
             return results
 
     def check_login(self, *, notify: bool = True) -> LoginStatus:
@@ -255,13 +304,32 @@ class ExchangeRunner:
             )
             self.db.set_runtime("last_login_state", status.state)
             if status.authenticated:
-                mark_login(
-                    self.db,
-                    nickname=status.nickname,
-                    checked_at=now.isoformat(),
-                )
-                self.db.set_runtime("login_expired_notified", "0")
+                self._record_login_success(status, now)
                 return status
+
+            if _auto_login_enabled(settings):
+                if self._auto_login_on_cooldown(now):
+                    return status
+                auto_status = self._perform_auto_login(settings)
+                if auto_status.authenticated:
+                    self._record_login_success(auto_status, now)
+                    self.db.set_runtime(
+                        "last_auto_login",
+                        now.isoformat(),
+                    )
+                    return auto_status
+                self._remember_auto_login_failure(auto_status, now)
+                if notify:
+                    self._notify_auto_login_failure(
+                        settings,
+                        auto_status,
+                        now,
+                    )
+                self.db.set_runtime(
+                    "last_login_state",
+                    "login_failed",
+                )
+                return auto_status
 
             should_notify = (
                 notify
@@ -282,6 +350,129 @@ class ExchangeRunner:
                 send_notifications(settings, title, content)
                 self.db.set_runtime("login_expired_notified", "1")
             return status
+
+    def login_with_credentials(
+        self,
+        *,
+        notify_failure: bool = True,
+    ) -> LoginStatus:
+        with self._login_lock:
+            settings = get_settings(self.db, self.cipher)
+            now = datetime.now(ZoneInfo(settings["timezone"]))
+            if not _auto_login_enabled(settings):
+                return LoginStatus(
+                    state="login_failed",
+                    message="请先保存 QQ 账号和密码并启用自动登录",
+                    checked_at=now.isoformat(),
+                )
+            status = self._perform_auto_login(settings)
+            self.db.set_runtime(
+                "last_login_check",
+                now.isoformat(),
+            )
+            if status.authenticated:
+                self._record_login_success(status, now)
+                self.db.set_runtime("last_auto_login", now.isoformat())
+            else:
+                self.db.set_runtime("last_login_state", "login_failed")
+                self._remember_auto_login_failure(status, now)
+                if notify_failure:
+                    self._notify_auto_login_failure(settings, status, now)
+            return status
+
+    def _record_login_success(
+        self,
+        status: LoginStatus,
+        now: datetime,
+    ) -> None:
+        mark_login(
+            self.db,
+            nickname=status.nickname,
+            checked_at=now.isoformat(),
+        )
+        self.db.set_runtime("last_login_state", status.state)
+        self.db.set_runtime("login_expired_notified", "0")
+        self.db.set_runtime("auto_login_failed_notified", "")
+        self.db.set_runtime("auto_login_cooldown_until", "")
+
+    def _perform_auto_login(
+        self,
+        settings: dict[str, Any],
+    ) -> LoginStatus:
+        now = datetime.now(ZoneInfo(settings["timezone"]))
+        try:
+            return self.browser.login_with_credentials(
+                settings["qq_username"],
+                settings["qq_password"],
+            )
+        except Exception as exc:
+            return LoginStatus(
+                state="login_failed",
+                message="QQ 自动登录执行失败，请打开完整窗口重试",
+                checked_at=now.isoformat(),
+                raw={"error_type": type(exc).__name__},
+            )
+
+    def _remember_auto_login_failure(
+        self,
+        status: LoginStatus,
+        now: datetime,
+    ) -> None:
+        self.db.set_runtime(
+            "auto_login_failure",
+            json.dumps(
+                {
+                    "date": now.date().isoformat(),
+                    "message": status.message,
+                },
+                ensure_ascii=False,
+            ),
+        )
+        self.db.set_runtime(
+            "auto_login_cooldown_until",
+            (now + timedelta(minutes=30)).isoformat(),
+        )
+
+    def _auto_login_on_cooldown(self, now: datetime) -> bool:
+        value = self.db.get_runtime("auto_login_cooldown_until")
+        if not value:
+            return False
+        try:
+            until = datetime.fromisoformat(value)
+        except ValueError:
+            return False
+        if until.tzinfo is None:
+            until = until.replace(tzinfo=now.tzinfo)
+        return until > now
+
+    def _notify_auto_login_failure(
+        self,
+        settings: dict[str, Any],
+        status: LoginStatus,
+        now: datetime,
+    ) -> None:
+        signature = f"{now.date().isoformat()}|{status.message}"
+        if (
+            self.db.get_runtime("auto_login_failed_notified")
+            == signature
+        ):
+            return
+        account = settings["account_label"] or "默认账号"
+        title = "QQ 自动登录失败 · 王者奖励兑换"
+        content = "\n".join(
+            [
+                f"账号：{account}",
+                f"QQ：{SecretCipher.mask(settings['qq_username'])}",
+                f"结果：{status.message}",
+                f"时间：{now.strftime('%Y-%m-%d %H:%M:%S')}",
+                "",
+                "自动登录需要验证码或人工核验时不会绕过安全校验。",
+                "请打开管理台扫码登录或使用“完整窗口”处理。",
+            ]
+        )
+        send_notifications(settings, title, content)
+        self.db.set_runtime("auto_login_failed_notified", signature)
+        self.db.set_runtime("login_expired_notified", "1")
 
     def _today_logs(
         self,
@@ -349,6 +540,8 @@ def _batch_notification(
     successful = sum(item.status == "success" for item in results)
     if successful == len(results):
         title = f"兑换完成 · {successful} 项"
+    elif any(item.status == "auto_login_failed" for item in results):
+        title = "QQ 自动登录失败 · 王者奖励兑换"
     elif any(item.status == "login_expired" for item in results):
         title = "王者奖励兑换 · 登录已过期"
     elif any(item.status == "needs_binding" for item in results):
@@ -366,7 +559,15 @@ def _batch_notification(
         lines.append(
             f"- {item.reward_name}：{item.message}{package}"
         )
-    if any(item.status == "login_expired" for item in results):
+    if any(item.status == "auto_login_failed" for item in results):
+        lines.extend(
+            [
+                "",
+                "自动登录遇到验证码或安全校验时不会自动绕过。",
+                "请打开管理台扫码登录或使用完整窗口处理。",
+            ]
+        )
+    elif any(item.status == "login_expired" for item in results):
         lines.extend(
             [
                 "",
@@ -374,4 +575,12 @@ def _batch_notification(
             ]
         )
     return title, "\n".join(lines)
+
+
+def _auto_login_enabled(settings: dict[str, Any]) -> bool:
+    return bool(
+        settings.get("qq_auto_login")
+        and settings.get("qq_username")
+        and settings.get("qq_password")
+    )
 

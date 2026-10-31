@@ -18,6 +18,9 @@ CREATE TABLE IF NOT EXISTS settings (
     auto_exchange INTEGER NOT NULL DEFAULT 0,
     reward_id INTEGER NOT NULL DEFAULT 1,
     reward_ids TEXT NOT NULL DEFAULT '[1]',
+    qq_username TEXT NOT NULL DEFAULT '',
+    qq_password TEXT NOT NULL DEFAULT '',
+    qq_auto_login INTEGER NOT NULL DEFAULT 1,
     onebot_enabled INTEGER NOT NULL DEFAULT 0,
     onebot_base_url TEXT NOT NULL DEFAULT '',
     onebot_access_token TEXT NOT NULL DEFAULT '',
@@ -107,6 +110,16 @@ class Database:
                 WHERE id = 1
                 """
             )
+        credential_columns = {
+            "qq_username": "TEXT NOT NULL DEFAULT ''",
+            "qq_password": "TEXT NOT NULL DEFAULT ''",
+            "qq_auto_login": "INTEGER NOT NULL DEFAULT 1",
+        }
+        for name, definition in credential_columns.items():
+            if name not in columns:
+                connection.execute(
+                    f"ALTER TABLE settings ADD COLUMN {name} {definition}"
+                )
 
     def query_one(
         self, sql: str, params: Iterable[Any] = ()

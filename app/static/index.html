@@ -52,7 +52,41 @@
           <span class="identity-icon"><i data-lucide="user-round"></i></span>
           <div>
             <strong id="nickname">尚未登录</strong>
-            <span id="partition">目标页扫码后自动保存 Cookie</span>
+            <span id="partition">支持扫码或账号密码自动登录</span>
+          </div>
+        </div>
+
+        <div class="credential-block">
+          <div class="channel-heading">
+            <div class="channel-title">
+              <span class="channel-icon onebot-icon"><i data-lucide="key-round"></i></span>
+              <div>
+                <strong>QQ 密码登录</strong>
+                <span id="qqCredentialState">未保存账号密码</span>
+              </div>
+            </div>
+            <label class="switch switch-small" title="登录失效时自动尝试密码登录">
+              <input id="qqAutoLogin" type="checkbox">
+              <span class="switch-track"><span></span></span>
+            </label>
+          </div>
+          <label class="field compact">
+            <span>QQ 账号</span>
+            <input id="qqAccount" type="text" maxlength="255" autocomplete="username" placeholder="QQ号 / 邮箱 / 手机号">
+          </label>
+          <label class="field compact">
+            <span>QQ 密码</span>
+            <input id="qqPassword" type="password" maxlength="512" autocomplete="new-password" placeholder="留空则保留已保存密码">
+          </label>
+          <div class="channel-actions">
+            <button class="text-button" id="clearQqBtn" type="button" hidden>
+              <i data-lucide="trash-2"></i>
+              <span>清除凭据</span>
+            </button>
+            <button class="text-button" id="passwordLoginBtn" type="button">
+              <i data-lucide="log-in"></i>
+              <span>立即密码登录</span>
+            </button>
           </div>
         </div>
 

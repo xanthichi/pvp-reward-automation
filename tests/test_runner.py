@@ -122,3 +122,115 @@ def test_login_expiry_stops_remaining_rewards_for_scheduled_run(
     assert second["executed"] is False
     assert fake_browser.execute_calls == [1]
 
+
+def test_exchange_retries_after_credential_login_succeeds(
+    tmp_path: Path,
+    fake_browser,
+) -> None:
+    db = Database(tmp_path / "test.db")
+    cipher = SecretCipher(tmp_path)
+    save_settings(
+        db,
+        cipher,
+        SettingsPayload(
+            reward_ids=[1],
+            qq_username="123456789",
+            qq_password="secret",
+            qq_auto_login=True,
+        ),
+    )
+    fake_browser.results = [
+        BrowserResult(
+            status="login_expired",
+            message="登录已过期",
+            login_status=LoginStatus(
+                state="login_required",
+                authenticated=False,
+            ),
+        ),
+        fake_browser.result,
+    ]
+    runner = ExchangeRunner(db, cipher, fake_browser)
+
+    results = runner.execute_batch(trigger="manual")
+
+    assert results[0].status == "success"
+    assert fake_browser.execute_calls == [1, 1]
+    assert fake_browser.credential_login_calls == [
+        ("123456789", "secret")
+    ]
+
+
+def test_auto_login_failure_is_pushed_once(
+    tmp_path: Path,
+    fake_browser,
+    monkeypatch,
+) -> None:
+    db = Database(tmp_path / "test.db")
+    cipher = SecretCipher(tmp_path)
+    save_settings(
+        db,
+        cipher,
+        SettingsPayload(
+            qq_username="123456789",
+            qq_password="wrong",
+            qq_auto_login=True,
+            pushplus_enabled=True,
+            pushplus_token="token",
+        ),
+    )
+    fake_browser.login_status = LoginStatus(
+        state="login_required",
+        authenticated=False,
+    )
+    fake_browser.credential_login_status = LoginStatus(
+        state="login_failed",
+        authenticated=False,
+        message="需要图片验证码，自动登录已停止",
+    )
+    sent: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        "app.services.runner.send_notifications",
+        lambda settings, title, content: sent.append((title, content)) or [],
+    )
+    runner = ExchangeRunner(db, cipher, fake_browser)
+
+    runner.check_login(notify=True)
+    runner.check_login(notify=True)
+
+    assert len(sent) == 1
+    assert "自动登录失败" in sent[0][0]
+    assert "验证码" in sent[0][1]
+
+
+def test_auto_login_runs_without_daily_exchange(
+    tmp_path: Path,
+    fake_browser,
+) -> None:
+    db = Database(tmp_path / "test.db")
+    cipher = SecretCipher(tmp_path)
+    save_settings(
+        db,
+        cipher,
+        SettingsPayload(
+            auto_exchange=False,
+            qq_username="123456789",
+            qq_password="secret",
+            qq_auto_login=True,
+        ),
+    )
+    fake_browser.login_status = LoginStatus(
+        state="login_required",
+        authenticated=False,
+    )
+    runner = ExchangeRunner(db, cipher, fake_browser)
+    scheduler = ExchangeScheduler(db, cipher, runner, enabled=False)
+
+    result = scheduler.tick()
+
+    assert result["login_state"] == "logged_in"
+    assert fake_browser.credential_login_calls == [
+        ("123456789", "secret")
+    ]
+    assert fake_browser.execute_calls == []
+

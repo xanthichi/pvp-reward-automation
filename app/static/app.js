@@ -23,6 +23,8 @@ function bindEvents() {
   $("#saveSettingsBtn").addEventListener("click", () => saveSettings());
   $("#refreshDashboardBtn").addEventListener("click", () => refreshDashboard());
   $("#loginBtn").addEventListener("click", () => openLogin("qq"));
+  $("#passwordLoginBtn").addEventListener("click", passwordLogin);
+  $("#clearQqBtn").addEventListener("click", clearQqCredentials);
   $("#visibleBrowserBtn").addEventListener("click", openVisibleBrowser);
   $("#visibleFromDialogBtn").addEventListener("click", openVisibleBrowser);
   $("#checkLoginBtn").addEventListener("click", checkLogin);
@@ -64,6 +66,9 @@ function bindEvents() {
 
   [
     "#accountLabel",
+    "#qqAccount",
+    "#qqPassword",
+    "#qqAutoLogin",
     "#scheduledTime",
     "#autoExchange",
     "#pushplusEnabled",
@@ -130,6 +135,7 @@ function renderDashboard() {
   renderSchedule();
   renderActivity();
   renderPushState();
+  renderQqCredentialState();
   renderTodayResult();
   updateClock();
   renderIcons();
@@ -139,6 +145,9 @@ function fillSettings() {
   const settings = state.dashboard?.settings;
   if (!settings) return;
   $("#accountLabel").value = settings.account_label || "";
+  $("#qqAccount").value = "";
+  $("#qqPassword").value = "";
+  $("#qqAutoLogin").checked = Boolean(settings.qq.auto_login);
   $("#scheduledTime").value = settings.scheduled_time || "10:05";
   $("#autoExchange").checked = Boolean(settings.auto_exchange);
   $("#pushplusEnabled").checked = Boolean(settings.pushplus.enabled);
@@ -204,7 +213,12 @@ function renderLoginState() {
     element.textContent = "需登录";
     element.classList.add("is-warning");
     $("#nickname").textContent = settings.last_login_nickname || "登录已失效";
-    $("#partition").textContent = "请重新扫码登录";
+    $("#partition").textContent = "将尝试账号密码登录";
+  } else if (login.state === "login_failed") {
+    element.textContent = "登录失败";
+    element.classList.add("is-error");
+    $("#nickname").textContent = settings.last_login_nickname || "自动登录失败";
+    $("#partition").textContent = "请检查凭据或完成安全验证";
   } else {
     element.textContent = "未检查";
     $("#nickname").textContent =
@@ -301,6 +315,25 @@ function renderPushState() {
   onebot.classList.toggle("is-set", settings.onebot.access_token_set);
 }
 
+function renderQqCredentialState() {
+  const qq = state.dashboard?.settings?.qq || {};
+  const stateElement = $("#qqCredentialState");
+  const accountInput = $("#qqAccount");
+  const clearButton = $("#clearQqBtn");
+  $("#qqAutoLogin").checked = Boolean(qq.auto_login);
+  if (qq.credentials_set) {
+    stateElement.textContent = `已保存 ${qq.account_hint || "QQ 凭据"}`;
+    stateElement.classList.add("is-set");
+    accountInput.placeholder = "已保存，留空则保留";
+    clearButton.hidden = false;
+  } else {
+    stateElement.textContent = "未保存账号密码";
+    stateElement.classList.remove("is-set");
+    accountInput.placeholder = "QQ号 / 邮箱 / 手机号";
+    clearButton.hidden = true;
+  }
+}
+
 function renderTodayResult() {
   const today = state.dashboard?.today || [];
   const element = $("#todayResult");
@@ -368,7 +401,10 @@ function updateSaveState(dirty) {
   button.querySelector("span").textContent = dirty ? "保存更改" : "保存配置";
 }
 
-async function saveSettings({ silent = false } = {}) {
+async function saveSettings({
+  silent = false,
+  clearQqCredentialsFlag = false,
+} = {}) {
   if (state.busy) return false;
   const selected = getSelectedRewardIds();
   const payload = {
@@ -376,6 +412,10 @@ async function saveSettings({ silent = false } = {}) {
     scheduled_time: $("#scheduledTime").value || "10:05",
     auto_exchange: $("#autoExchange").checked,
     reward_ids: selected,
+    qq_username: $("#qqAccount").value.trim(),
+    qq_password: $("#qqPassword").value,
+    qq_auto_login: $("#qqAutoLogin").checked,
+    clear_qq_credentials: clearQqCredentialsFlag,
     onebot_enabled: $("#onebotEnabled").checked,
     onebot_base_url: $("#onebotBaseUrl").value.trim(),
     onebot_access_token: $("#onebotToken").value,
@@ -402,6 +442,43 @@ async function saveSettings({ silent = false } = {}) {
     return false;
   } finally {
     setBusy(false, $("#saveSettingsBtn"));
+  }
+}
+
+async function passwordLogin() {
+  const button = $("#passwordLoginBtn");
+  const saved = await saveSettings({ silent: true });
+  if (!saved) return;
+  setBusy(true, button);
+  try {
+    const data = await api("/api/login/password", {
+      method: "POST",
+      body: "{}",
+    });
+    if (data.ok) {
+      toast("自动登录成功", data.login.nickname || "QQ 登录态已保存。");
+    } else {
+      toast("自动登录失败", data.login.message, "error", 6500);
+    }
+    await refreshDashboard();
+  } catch (error) {
+    toast("自动登录失败", error.message, "error", 6500);
+  } finally {
+    setBusy(false, button);
+  }
+}
+
+async function clearQqCredentials() {
+  if (!window.confirm("清除数据库中的 QQ 账号和密码？")) return;
+  const saved = await saveSettings({
+    silent: true,
+    clearQqCredentialsFlag: true,
+  });
+  if (saved) {
+    $("#qqAccount").value = "";
+    $("#qqPassword").value = "";
+    toast("凭据已清除", "数据库中的 QQ 账号和密码已删除。");
+    await refreshDashboard();
   }
 }
 
@@ -679,6 +756,13 @@ function activityVisual(status) {
   }
   if (status === "login_expired") {
     return { label: "登录过期", icon: "log-in", className: "is-warning" };
+  }
+  if (status === "auto_login_failed") {
+    return {
+      label: "自动登录失败",
+      icon: "shield-alert",
+      className: "is-failed",
+    };
   }
   if (status === "needs_binding") {
     return { label: "需要绑定", icon: "link-2-off", className: "is-warning" };

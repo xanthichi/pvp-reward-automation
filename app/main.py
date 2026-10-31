@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
@@ -72,7 +72,7 @@ def create_app(
 
     app = FastAPI(
         title="王者奖励兑换",
-        version="1.0.0",
+        version="1.1.0",
         docs_url=None,
         redoc_url=None,
         lifespan=lifespan,
@@ -142,7 +142,20 @@ def create_app(
         }
 
     @app.put("/api/settings")
-    def update_settings(payload: SettingsPayload) -> dict[str, bool]:
+    def update_settings(
+        payload: SettingsPayload,
+        request: Request,
+    ) -> dict[str, bool]:
+        saves_credentials = bool(
+            payload.qq_username
+            or payload.qq_password.get_secret_value()
+            or payload.clear_qq_credentials
+        )
+        if saves_credentials and not _secure_request(request):
+            raise HTTPException(
+                status_code=400,
+                detail="保存 QQ 账号密码需要本机访问或 HTTPS",
+            )
         save_settings(db, cipher, payload)
         return {"ok": True}
 
@@ -207,6 +220,16 @@ def create_app(
     def check_login() -> dict[str, Any]:
         status = runner.check_login(notify=False)
         return {"ok": status.state != "error", "login": status.public()}
+
+    @app.post("/api/login/password")
+    def password_login() -> dict[str, Any]:
+        status = runner.login_with_credentials(notify_failure=True)
+        if status.authenticated:
+            _remember_login(db, status)
+        return {
+            "ok": status.authenticated,
+            "login": status.public(),
+        }
 
     @app.post("/api/login/close")
     def close_login() -> dict[str, bool]:
@@ -306,6 +329,19 @@ def _remember_login(db: Database, status: Any) -> None:
     else:
         db.set_runtime("last_login_state", status.state)
         db.set_runtime("last_login_check", status.checked_at)
+
+
+def _secure_request(request: Request) -> bool:
+    host = (request.url.hostname or "").lower()
+    forwarded_proto = request.headers.get(
+        "x-forwarded-proto",
+        "",
+    ).lower()
+    return (
+        request.url.scheme == "https"
+        or forwarded_proto == "https"
+        or host in {"127.0.0.1", "localhost", "::1"}
+    )
 
 
 def _exchange_public(row: Any) -> dict[str, Any]:

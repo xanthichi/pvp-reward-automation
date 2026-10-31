@@ -405,6 +405,21 @@ img {
   font-size: 10px;
 }
 
+.credential-block {
+  margin: 4px 0 14px;
+  padding: 12px 0;
+  border-top: 1px solid var(--line-soft);
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.credential-block .channel-heading {
+  margin-bottom: 10px;
+}
+
+.credential-block .channel-actions {
+  min-height: 24px;
+}
+
 .button {
   display: inline-flex;
   align-items: center;

@@ -17,6 +17,12 @@ def _row_dict(row: Any, cipher: SecretCipher) -> dict[str, Any]:
     result["pushplus_token"] = cipher.decrypt(
         str(result.get("pushplus_token", ""))
     )
+    result["qq_username"] = cipher.decrypt(
+        str(result.get("qq_username", ""))
+    )
+    result["qq_password"] = cipher.decrypt(
+        str(result.get("qq_password", ""))
+    )
     try:
         reward_ids = json.loads(str(result.get("reward_ids") or "[]"))
     except json.JSONDecodeError:
@@ -55,6 +61,15 @@ def get_public_settings(
         "reward_id": int(settings["reward_ids"][0]),
         "last_login_at": settings["last_login_at"],
         "last_login_nickname": settings["last_login_nickname"],
+        "qq": {
+            "auto_login": bool(settings["qq_auto_login"]),
+            "credentials_set": bool(
+                settings["qq_username"] and settings["qq_password"]
+            ),
+            "account_hint": SecretCipher.mask(
+                settings["qq_username"]
+            ),
+        },
         "onebot": {
             "enabled": bool(settings["onebot_enabled"]),
             "base_url": settings["onebot_base_url"],
@@ -92,6 +107,18 @@ def save_settings(
     elif payload.pushplus_token.strip():
         pushplus_token = payload.pushplus_token.strip()
 
+    qq_username = current["qq_username"]
+    qq_password = current["qq_password"]
+    if payload.clear_qq_credentials:
+        qq_username = ""
+        qq_password = ""
+    else:
+        if payload.qq_username.strip():
+            qq_username = payload.qq_username.strip()
+        supplied_password = payload.qq_password.get_secret_value()
+        if supplied_password:
+            qq_password = supplied_password
+
     db.execute(
         """
         UPDATE settings SET
@@ -100,6 +127,9 @@ def save_settings(
             auto_exchange = ?,
             reward_id = ?,
             reward_ids = ?,
+            qq_username = ?,
+            qq_password = ?,
+            qq_auto_login = ?,
             onebot_enabled = ?,
             onebot_base_url = ?,
             onebot_access_token = ?,
@@ -116,6 +146,9 @@ def save_settings(
             int(payload.auto_exchange),
             payload.reward_ids[0],
             json.dumps(payload.reward_ids),
+            cipher.encrypt(qq_username),
+            cipher.encrypt(qq_password),
+            int(payload.qq_auto_login),
             int(payload.onebot_enabled),
             payload.onebot_base_url,
             cipher.encrypt(onebot_token),

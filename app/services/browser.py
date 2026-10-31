@@ -310,6 +310,232 @@ class BrowserWorker:
         page.wait_for_timeout(1_500)
         return self._read_status(page)
 
+    def login_with_credentials(
+        self,
+        username: str,
+        password: str,
+    ) -> LoginStatus:
+        return self._call(
+            self._login_with_credentials,
+            username,
+            password,
+            timeout=120,
+        )
+
+    def _login_with_credentials(
+        self,
+        username: str,
+        password: str,
+    ) -> LoginStatus:
+        if not username or not password:
+            raise ValueError("QQ 账号或密码未配置")
+
+        page = self._ensure_page()
+        self._load_target(page)
+        status = self._read_status(page)
+        if status.authenticated:
+            return status
+
+        self._open_login("qq")
+        frame = self._wait_password_login_frame(page)
+        if frame is None:
+            return LoginStatus(
+                state="login_failed",
+                message="未找到 QQ 密码登录表单",
+                checked_at=datetime.now().astimezone().isoformat(),
+            )
+
+        try:
+            frame.wait_for_function(
+                """
+                () => {
+                  const button = document.querySelector('#login_button');
+                  return button && !button.disabled;
+                }
+                """,
+                timeout=15_000,
+            )
+        except PlaywrightTimeoutError:
+            return self._credential_failure(
+                page,
+                "QQ 密码登录表单未就绪，请打开完整窗口重试",
+                "表单未就绪",
+            )
+
+        frame.locator("#u").fill(str(username), timeout=10_000)
+        frame.locator("#p").fill(str(password), timeout=10_000)
+        page.wait_for_timeout(500)
+
+        if self._element_visible(frame, "#verifyArea"):
+            return self._credential_failure(
+                page,
+                "需要图片验证码，自动登录已停止",
+                "图片验证码",
+            )
+
+        try:
+            frame.locator("#login_button").click(timeout=10_000)
+        except PlaywrightError as exc:
+            return self._credential_failure(
+                page,
+                f"无法提交 QQ 登录表单：{exc}",
+                "提交失败",
+            )
+
+        last_message = ""
+        for _ in range(30):
+            page.wait_for_timeout(1_000)
+            try:
+                status = self._read_status(page)
+                if status.authenticated:
+                    return status
+            except PlaywrightError:
+                pass
+
+            current = self._password_login_frame(page, raise_on_missing=False)
+            if current is not None:
+                if self._element_visible(current, "#verifyArea"):
+                    return self._credential_failure(
+                        page,
+                        "QQ 要求图片验证码，自动登录已停止",
+                        "图片验证码",
+                    )
+                error_text = self._login_error(current)
+                if error_text:
+                    last_message = error_text
+                    if _credential_error_terminal(error_text):
+                        return self._credential_failure(
+                            page,
+                            _credential_error_message(error_text),
+                            error_text,
+                        )
+                challenge = self._login_challenge(current)
+                if challenge:
+                    return self._credential_failure(
+                        page,
+                        challenge,
+                        challenge,
+                    )
+
+        return self._credential_failure(
+            page,
+            last_message or "QQ 自动登录超时，可能需要验证码或人工核验",
+            last_message or "超时",
+        )
+
+    @staticmethod
+    def _password_login_frame(
+        page: Any,
+        *,
+        raise_on_missing: bool = True,
+    ) -> Any | None:
+        for frame in page.frames:
+            if "ptlogin2.qq.com" not in frame.url:
+                continue
+            try:
+                if frame.locator("#u").count() and frame.locator("#p").count():
+                    if frame.locator("#switcher_plogin").is_visible():
+                        frame.locator("#switcher_plogin").click(timeout=2_000)
+                        page_object = getattr(frame, "page", None)
+                        if page_object is not None:
+                            page_object.wait_for_timeout(300)
+                    return frame
+            except PlaywrightError:
+                continue
+        if not raise_on_missing:
+            return None
+        return None
+
+    def _wait_password_login_frame(
+        self,
+        page: Any,
+        *,
+        timeout_seconds: int = 15,
+    ) -> Any | None:
+        for _ in range(timeout_seconds * 2):
+            frame = self._password_login_frame(
+                page,
+                raise_on_missing=False,
+            )
+            if frame is not None:
+                return frame
+            page.wait_for_timeout(500)
+        return None
+
+    @staticmethod
+    def _element_visible(frame: Any, selector: str) -> bool:
+        try:
+            return bool(
+                frame.evaluate(
+                    """
+                    (selector) => {
+                      const element = document.querySelector(selector);
+                      if (!element) return false;
+                      const style = getComputedStyle(element);
+                      const rect = element.getBoundingClientRect();
+                      return style.display !== 'none'
+                        && style.visibility !== 'hidden'
+                        && rect.width > 0 && rect.height > 0;
+                    }
+                    """,
+                    selector,
+                )
+            )
+        except PlaywrightError:
+            return False
+
+    @staticmethod
+    def _login_error(frame: Any) -> str:
+        try:
+            return frame.evaluate(
+                """
+                () => {
+                  const error = document.querySelector('#err_m');
+                  const wrapper = document.querySelector('#error_tips');
+                  if (!error || !wrapper) return '';
+                  const style = getComputedStyle(wrapper);
+                  const rect = wrapper.getBoundingClientRect();
+                  if (style.display === 'none' || rect.width === 0) return '';
+                  return error.textContent.trim();
+                }
+                """
+            )
+        except PlaywrightError:
+            return ""
+
+    @staticmethod
+    def _login_challenge(frame: Any) -> str:
+        try:
+            text = frame.locator("body").inner_text(timeout=2_000)
+        except PlaywrightError:
+            return ""
+        if "登录环境异常" in text:
+            return "QQ 登录环境异常，需要人工扫码或安全验证"
+        if "设备锁" in text and "扫码" in text:
+            return "QQ 设备锁要求扫码验证"
+        if "短信验证" in text or "安全验证" in text:
+            return "QQ 要求安全验证，自动登录已停止"
+        return ""
+
+    def _credential_failure(
+        self,
+        page: Any,
+        message: str,
+        kind: str,
+    ) -> LoginStatus:
+        try:
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+            path = self.artifact_root / f"{stamp}-login-failed.png"
+            page.screenshot(path=str(path), full_page=False)
+        except PlaywrightError:
+            pass
+        return LoginStatus(
+            state="login_failed",
+            message=message,
+            checked_at=datetime.now().astimezone().isoformat(),
+            raw={"failure_kind": kind},
+        )
+
     def close_session(self) -> None:
         self._call(self._close_session, timeout=30)
 
@@ -560,4 +786,30 @@ def _mentions_already(message: str) -> bool:
         token in message
         for token in ("已经兑换", "已兑换", "兑换过了", "今日已", "明天再来")
     )
+
+
+def _credential_error_terminal(message: str) -> bool:
+    return any(
+        token in message
+        for token in (
+            "密码错误",
+            "账号不存在",
+            "账号或密码",
+            "频繁",
+            "冻结",
+            "验证码",
+            "安全验证",
+            "环境异常",
+        )
+    )
+
+
+def _credential_error_message(message: str) -> str:
+    if "密码错误" in message or "账号或密码" in message:
+        return "QQ 账号或密码不正确"
+    if "频繁" in message:
+        return "QQ 登录过于频繁，请稍后再试"
+    if "验证" in message:
+        return f"QQ 要求安全验证：{message}"
+    return message
 
