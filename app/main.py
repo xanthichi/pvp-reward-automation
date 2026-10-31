@@ -142,6 +142,7 @@ def create_app(
                 "scheduler_last_error": db.get_runtime(
                     "scheduler_last_error"
                 ),
+                "remote_desktop": _remote_desktop_info(),
             },
         }
 
@@ -237,10 +238,19 @@ def create_app(
             ) from None
         if status.authenticated:
             _remember_login(db, status)
+        interactive = not status.authenticated or not status.bound
+        logger.info(
+            "Interactive QQ login ready: authenticated=%s bound=%s "
+            "remote_desktop=%s",
+            status.authenticated,
+            status.bound,
+            _remote_desktop_info()["enabled"],
+        )
         return {
             "ok": status.authenticated,
-            "interactive": True,
+            "interactive": interactive,
             "login": status.public(),
+            "desktop": _remote_desktop_info(),
         }
 
     @app.post("/api/login/close")
@@ -266,7 +276,12 @@ def create_app(
                 detail=f"完整浏览器窗口打开失败：{exc}",
             ) from None
         _remember_login(db, status)
-        return {"ok": True, "login": status.public()}
+        return {
+            "ok": True,
+            "interactive": not status.authenticated or not status.bound,
+            "login": status.public(),
+            "desktop": _remote_desktop_info(),
+        }
 
     @app.post("/api/exchange")
     def exchange_now() -> dict[str, Any]:
@@ -347,6 +362,21 @@ def _remember_login(db: Database, status: Any) -> None:
     else:
         db.set_runtime("last_login_state", status.state)
         db.set_runtime("last_login_check", status.checked_at)
+
+
+def _remote_desktop_info() -> dict[str, Any]:
+    enabled = os.getenv("PVP_REMOTE_DESKTOP", "0") == "1"
+    configured_url = os.getenv("PVP_NOVNC_URL", "").strip()
+    try:
+        port = int(os.getenv("PVP_NOVNC_PORT", "6080"))
+    except ValueError:
+        port = 6080
+    return {
+        "enabled": enabled,
+        "url": configured_url,
+        "port": port,
+        "password_required": bool(os.getenv("PVP_VNC_PASSWORD", "")),
+    }
 
 
 def _configure_app_logging(data_dir: Path) -> None:

@@ -5,6 +5,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from app.main import create_app
+from app.services.browser import LoginStatus
 from app.services.settings import get_settings
 
 
@@ -155,7 +156,18 @@ def test_qq_password_can_be_saved_without_local_https_guard(
 def test_password_login_opens_interactive_window(
     tmp_path: Path,
     fake_browser,
+    monkeypatch,
 ) -> None:
+    monkeypatch.setenv("PVP_REMOTE_DESKTOP", "1")
+    monkeypatch.setenv("PVP_NOVNC_PORT", "6080")
+    monkeypatch.setenv("PVP_VNC_PASSWORD", "test-vnc-password")
+    fake_browser.login_status = LoginStatus(
+        state="verification_required",
+        authenticated=False,
+        message="QQ 要求手机号安全验证",
+        checked_at="2026-10-30T10:00:00+08:00",
+        verification_required=True,
+    )
     app = create_app(
         data_dir=tmp_path,
         browser=fake_browser,
@@ -177,6 +189,12 @@ def test_password_login_opens_interactive_window(
     assert fake_browser.visible_login_calls == [
         ("qq", "123456789", "secret", True)
     ]
+    assert response.json()["desktop"] == {
+        "enabled": True,
+        "url": "",
+        "port": 6080,
+        "password_required": True,
+    }
 
 
 

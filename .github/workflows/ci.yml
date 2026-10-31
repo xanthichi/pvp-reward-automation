@@ -38,9 +38,10 @@ jobs:
 
       - name: Smoke test container
         run: |
-          docker run -d --name pvp-reward-ci -p 18000:8000 pvp-reward:ci
+          docker run -d --name pvp-reward-ci -p 18000:8000 -p 18080:6080 pvp-reward:ci
           for attempt in {1..30}; do
-            if curl --fail --silent http://127.0.0.1:18000/healthz; then
+            if curl --fail --silent http://127.0.0.1:18000/healthz \
+              && curl --fail --silent http://127.0.0.1:18080/vnc.html; then
               exit 0
             fi
             sleep 2

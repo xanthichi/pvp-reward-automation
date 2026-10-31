@@ -1249,6 +1249,12 @@ dialog::backdrop {
   line-height: 1.6;
 }
 
+.dialog-footer-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
 .screenshot-dialog {
   width: min(1180px, calc(100vw - 28px));
 }
@@ -1438,7 +1444,12 @@ dialog::backdrop {
     flex-direction: column;
   }
 
-  .dialog-footer .button {
+  .dialog-footer-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .dialog-footer-actions .button {
     width: 100%;
   }
 

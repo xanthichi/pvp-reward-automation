@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import queue
+import re
+import socket
 import threading
 import time
 from concurrent.futures import Future
@@ -21,6 +24,8 @@ from app.rewards import TARGET_PAGE, get_reward
 
 
 logger = logging.getLogger(__name__)
+
+_PROFILE_LOCK_TARGET = re.compile(r"^(?P<host>.+)-(?P<pid>\d+)$")
 
 
 @dataclass
@@ -134,6 +139,7 @@ class BrowserWorker:
                 self._context = None
                 self._page = None
 
+        self._clear_stale_profile_locks()
         headless = self.headless if visible is None else not visible
         self._context = self._playwright.chromium.launch_persistent_context(
             str(self.profile_root),
@@ -145,6 +151,55 @@ class BrowserWorker:
         )
         self._context.set_default_timeout(20_000)
         return self._context
+
+    def _clear_stale_profile_locks(self) -> None:
+        """Remove Chromium singleton files left by a previous container."""
+        if os.name != "posix":
+            return
+
+        lock_path = self.profile_root / "SingletonLock"
+        if not lock_path.is_symlink() and not lock_path.exists():
+            return
+
+        try:
+            target = os.readlink(lock_path)
+        except OSError as exc:
+            logger.warning("Unable to inspect Chromium profile lock: %s", exc)
+            return
+
+        reason = _profile_lock_stale_reason(
+            target,
+            hostname=socket.gethostname(),
+            pid_exists=_pid_exists,
+            pid_is_browser=lambda pid: _pid_is_browser_for_profile(
+                pid,
+                self.profile_root,
+            ),
+        )
+        if not reason:
+            raise RuntimeError(
+                "浏览器配置正在被另一个 Chromium 进程使用，请先停止重复启动的容器"
+            )
+
+        logger.warning(
+            "Removing stale Chromium profile lock (%s): %s",
+            reason,
+            target,
+        )
+        for name in (
+            "SingletonLock",
+            "SingletonCookie",
+            "SingletonSocket",
+        ):
+            path = self.profile_root / name
+            try:
+                path.unlink(missing_ok=True)
+            except OSError as exc:
+                logger.warning(
+                    "Unable to remove stale profile lock %s: %s",
+                    path,
+                    exc,
+                )
 
     def _ensure_page(self) -> Any:
         context = self._ensure_context()
@@ -302,7 +357,7 @@ class BrowserWorker:
             try:
                 page = self._ensure_page_with_mode(visible=True)
                 break
-            except PlaywrightError as exc:
+            except (PlaywrightError, RuntimeError) as exc:
                 last_error = exc
                 logger.warning(
                     "Visible Chromium launch attempt %s failed: %s",
@@ -1222,6 +1277,52 @@ def _mentions_login(message: str) -> bool:
         token in text
         for token in ("登录", "过期", "login", "未授权", "重新扫码")
     )
+
+
+def _profile_lock_stale_reason(
+    target: str,
+    *,
+    hostname: str,
+    pid_exists: Callable[[int], bool],
+    pid_is_browser: Callable[[int], bool],
+) -> str:
+    match = _PROFILE_LOCK_TARGET.match(target)
+    if not match:
+        return ""
+
+    lock_host = match.group("host")
+    if lock_host != hostname:
+        return "profile belongs to a previous container"
+
+    pid = int(match.group("pid"))
+    if not pid_exists(pid):
+        return "browser process exited"
+    if not pid_is_browser(pid):
+        return "PID was reused by another process"
+    return ""
+
+
+def _pid_exists(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _pid_is_browser_for_profile(pid: int, profile_root: Path) -> bool:
+    command_line = Path(f"/proc/{pid}/cmdline")
+    try:
+        raw = command_line.read_bytes()
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return True
+
+    arguments = raw.replace(b"\0", b" ").decode("utf-8", errors="ignore")
+    return "chrom" in arguments.lower() and str(profile_root) in arguments
 
 
 def _mentions_already(message: str) -> bool:

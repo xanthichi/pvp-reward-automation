@@ -298,10 +298,16 @@
     </div>
     <div class="dialog-footer">
       <p id="loginHint">使用手机 QQ 或微信扫描二维码。登录成功后 Cookie 会自动保存。</p>
-      <button class="button button-secondary" id="visibleFromDialogBtn" type="button">
-        <i data-lucide="monitor-up"></i>
-        <span>打开完整窗口</span>
-      </button>
+      <div class="dialog-footer-actions">
+        <a class="text-button" id="remoteDesktopLink" href="#" target="_blank" rel="noopener" hidden>
+          <i data-lucide="monitor-up"></i>
+          <span>打开远程登录窗口</span>
+        </a>
+        <button class="button button-secondary" id="visibleFromDialogBtn" type="button">
+          <i data-lucide="monitor-up"></i>
+          <span>打开完整窗口</span>
+        </button>
+      </div>
     </div>
   </dialog>
 

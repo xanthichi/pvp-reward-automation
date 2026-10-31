@@ -447,17 +447,35 @@ async function saveSettings({
 
 async function passwordLogin() {
   const button = $("#passwordLoginBtn");
+  const desktopWindow = window.open("", "pvp_remote_login");
+  prepareDesktopWindow(desktopWindow);
   const saved = await saveSettings({ silent: true });
-  if (!saved) return;
+  if (!saved) {
+    closeDesktopWindow(desktopWindow);
+    return;
+  }
   setBusy(true, button);
   try {
     const data = await api("/api/login/password", {
       method: "POST",
       body: "{}",
     });
-    if (data.ok) {
+    const desktopUrl = remoteDesktopUrl(data.desktop);
+    if (desktopUrl && data.interactive) {
+      showRemoteDesktop(desktopWindow, desktopUrl, data.desktop);
+      $("#loginHint").textContent =
+        "请在远程登录窗口中完成图片验证码、手机号验证或角色绑定。";
+      toast(
+        "请在远程窗口继续",
+        "账号密码已提交，远程桌面中会显示腾讯当前验证页面。",
+        "warning",
+        8000,
+      );
+    } else if (data.ok) {
+      closeDesktopWindow(desktopWindow);
       toast("自动登录成功", data.login.nickname || "QQ 登录态已保存。");
     } else if (data.interactive) {
+      closeDesktopWindow(desktopWindow);
       toast(
         "登录窗口已打开",
         "请在 Chromium 窗口中输入图片验证码并完成手机号验证。",
@@ -465,10 +483,12 @@ async function passwordLogin() {
         8000,
       );
     } else {
+      closeDesktopWindow(desktopWindow);
       toast("自动登录失败", data.login.message, "error", 6500);
     }
     await refreshDashboard();
   } catch (error) {
+    closeDesktopWindow(desktopWindow);
     toast("自动登录失败", error.message, "error", 6500);
   } finally {
     setBusy(false, button);
@@ -602,19 +622,79 @@ async function closeLogin() {
 
 async function openVisibleBrowser() {
   const button = $("#visibleFromDialogBtn");
+  const desktopWindow = window.open("", "pvp_remote_login");
+  prepareDesktopWindow(desktopWindow);
   setBusy(true, button);
   try {
-    await api("/api/browser/visible", { method: "POST", body: "{}" });
-    toast(
-      "完整窗口已打开",
-      "请在弹出的 Chromium 窗口中完成登录或正式服角色绑定。",
-      "warning",
-      6500,
-    );
+    const data = await api("/api/browser/visible", {
+      method: "POST",
+      body: "{}",
+    });
+    const desktopUrl = remoteDesktopUrl(data.desktop);
+    if (desktopUrl) {
+      showRemoteDesktop(desktopWindow, desktopUrl, data.desktop);
+      toast(
+        "远程桌面已打开",
+        "请在新标签页中完成登录或正式服角色绑定。",
+        "warning",
+        6500,
+      );
+    } else {
+      closeDesktopWindow(desktopWindow);
+      toast(
+        "完整窗口已打开",
+        "请在本机 Chromium 窗口中完成登录或正式服角色绑定。",
+        "warning",
+        6500,
+      );
+    }
   } catch (error) {
+    closeDesktopWindow(desktopWindow);
     toast("窗口打开失败", error.message, "error");
   } finally {
     setBusy(false, button);
+  }
+}
+
+function prepareDesktopWindow(desktopWindow) {
+  if (!desktopWindow) return;
+  try {
+    desktopWindow.document.title = "正在连接远程登录窗口";
+    desktopWindow.document.body.style.cssText =
+      "margin:0;display:grid;place-items:center;min-height:100vh;" +
+      "background:#0c1318;color:#dde8ee;font:14px system-ui,sans-serif";
+    desktopWindow.document.body.textContent = "正在打开远程登录窗口…";
+  } catch {
+    // A blocked or navigated popup does not need placeholder content.
+  }
+}
+
+function closeDesktopWindow(desktopWindow) {
+  if (desktopWindow && !desktopWindow.closed) {
+    desktopWindow.close();
+  }
+}
+
+function remoteDesktopUrl(desktop) {
+  if (!desktop?.enabled) return "";
+  if (desktop.url) return desktop.url;
+  const port = Number(desktop.port) || 6080;
+  return (
+    `${window.location.protocol}//${window.location.hostname}:${port}` +
+    "/vnc.html?autoconnect=true&resize=remote&reconnect=true"
+  );
+}
+
+function showRemoteDesktop(desktopWindow, desktopUrl, desktop) {
+  $("#remoteDesktopLink").href = desktopUrl;
+  $("#remoteDesktopLink").hidden = false;
+  if (desktopWindow && !desktopWindow.closed) {
+    desktopWindow.location.replace(desktopUrl);
+    return;
+  }
+  window.open(desktopUrl, "_blank", "noopener");
+  if (desktop?.password_required) {
+    toast("远程桌面需要密码", "请输入服务器配置的 VNC 密码。", "warning");
   }
 }
 
