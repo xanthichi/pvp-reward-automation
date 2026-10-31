@@ -380,6 +380,33 @@ class ExchangeRunner:
                     self._notify_auto_login_failure(settings, status, now)
             return status
 
+    def request_login_verification(self) -> LoginStatus:
+        with self._login_lock:
+            settings = get_settings(self.db, self.cipher)
+            now = datetime.now(ZoneInfo(settings["timezone"]))
+            status = self.browser.request_login_verification()
+            self.db.set_runtime(
+                "last_login_check",
+                now.isoformat(),
+            )
+            self.db.set_runtime("last_login_state", status.state)
+            return status
+
+    def submit_login_verification(self, code: str) -> LoginStatus:
+        with self._login_lock:
+            settings = get_settings(self.db, self.cipher)
+            now = datetime.now(ZoneInfo(settings["timezone"]))
+            status = self.browser.submit_login_verification(code)
+            self.db.set_runtime(
+                "last_login_check",
+                now.isoformat(),
+            )
+            if status.authenticated:
+                self._record_login_success(status, now)
+            else:
+                self.db.set_runtime("last_login_state", status.state)
+            return status
+
     def _record_login_success(
         self,
         status: LoginStatus,

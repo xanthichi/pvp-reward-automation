@@ -127,7 +127,7 @@ def test_login_and_settings_validation(
         assert login.json()["login"]["state"] == "logged_in"
 
 
-def test_password_save_requires_local_or_https(
+def test_qq_password_can_be_saved_without_local_https_guard(
     tmp_path: Path,
     fake_browser,
 ) -> None:
@@ -144,5 +144,34 @@ def test_password_save_requires_local_or_https(
                 "qq_password": "secret",
             },
         )
-    assert response.status_code == 400
+        assert response.status_code == 200
+        assert (
+            client.get("/api/dashboard")
+            .json()["settings"]["qq"]["credentials_set"]
+            is True
+        )
+
+
+def test_verification_code_can_be_requested_and_submitted(
+    tmp_path: Path,
+    fake_browser,
+) -> None:
+    app = create_app(
+        data_dir=tmp_path,
+        browser=fake_browser,
+        disable_scheduler=True,
+    )
+    with TestClient(app) as client:
+        sent = client.post("/api/login/verification/send")
+        submitted = client.post(
+            "/api/login/verification/submit",
+            json={"code": "123456"},
+        )
+
+    assert sent.status_code == 200
+    assert sent.json()["login"]["verification_required"] is True
+    assert submitted.status_code == 200
+    assert submitted.json()["login"]["state"] == "logged_in"
+
+
 

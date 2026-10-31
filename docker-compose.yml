@@ -9,7 +9,7 @@ services:
     restart: unless-stopped
     init: true
     ports:
-      - "${PVP_BIND:-127.0.0.1}:${PVP_PORT:-8675}:8000"
+      - "${PVP_BIND:-0.0.0.0}:${PVP_PORT:-8675}:8000"
     environment:
       PVP_DATA_DIR: /app/data
       PVP_HEADLESS: "1"

@@ -60,6 +60,18 @@ class FakeBrowser:
         self.credential_login_calls.append((username, password))
         return self.credential_login_status
 
+    def request_login_verification(self) -> LoginStatus:
+        return LoginStatus(
+            state="verification_required",
+            authenticated=False,
+            verification_required=True,
+            verification_hint="输入验证码",
+            message="验证码已发送",
+        )
+
+    def submit_login_verification(self, code: str) -> LoginStatus:
+        return self.credential_login_status
+
     def open_login(self, platform: str = "qq") -> LoginStatus:
         return self.login_status
 

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
@@ -19,6 +19,7 @@ from app.schemas import (
     PlatformPayload,
     ProviderTestPayload,
     SettingsPayload,
+    VerificationCodePayload,
 )
 from app.security import SecretCipher
 from app.services.browser import BrowserWorker
@@ -142,20 +143,7 @@ def create_app(
         }
 
     @app.put("/api/settings")
-    def update_settings(
-        payload: SettingsPayload,
-        request: Request,
-    ) -> dict[str, bool]:
-        saves_credentials = bool(
-            payload.qq_username
-            or payload.qq_password.get_secret_value()
-            or payload.clear_qq_credentials
-        )
-        if saves_credentials and not _secure_request(request):
-            raise HTTPException(
-                status_code=400,
-                detail="保存 QQ 账号密码需要本机访问或 HTTPS",
-            )
+    def update_settings(payload: SettingsPayload) -> dict[str, bool]:
         save_settings(db, cipher, payload)
         return {"ok": True}
 
@@ -224,6 +212,26 @@ def create_app(
     @app.post("/api/login/password")
     def password_login() -> dict[str, Any]:
         status = runner.login_with_credentials(notify_failure=True)
+        if status.authenticated:
+            _remember_login(db, status)
+        return {
+            "ok": status.authenticated,
+            "login": status.public(),
+        }
+
+    @app.post("/api/login/verification/send")
+    def send_login_verification() -> dict[str, Any]:
+        status = runner.request_login_verification()
+        return {
+            "ok": status.state == "verification_required",
+            "login": status.public(),
+        }
+
+    @app.post("/api/login/verification/submit")
+    def submit_login_verification(
+        payload: VerificationCodePayload,
+    ) -> dict[str, Any]:
+        status = runner.submit_login_verification(payload.code)
         if status.authenticated:
             _remember_login(db, status)
         return {
@@ -329,19 +337,6 @@ def _remember_login(db: Database, status: Any) -> None:
     else:
         db.set_runtime("last_login_state", status.state)
         db.set_runtime("last_login_check", status.checked_at)
-
-
-def _secure_request(request: Request) -> bool:
-    host = (request.url.hostname or "").lower()
-    forwarded_proto = request.headers.get(
-        "x-forwarded-proto",
-        "",
-    ).lower()
-    return (
-        request.url.scheme == "https"
-        or forwarded_proto == "https"
-        or host in {"127.0.0.1", "localhost", "::1"}
-    )
 
 
 def _exchange_public(row: Any) -> dict[str, Any]:

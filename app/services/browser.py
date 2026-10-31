@@ -28,6 +28,8 @@ class LoginStatus:
     experience: str = ""
     message: str = ""
     checked_at: str = ""
+    verification_required: bool = False
+    verification_hint: str = ""
     raw: dict[str, Any] = field(default_factory=dict)
 
     def public(self) -> dict[str, Any]:
@@ -40,6 +42,8 @@ class LoginStatus:
             "experience": self.experience,
             "message": self.message,
             "checked_at": self.checked_at,
+            "verification_required": self.verification_required,
+            "verification_hint": self.verification_hint,
         }
 
 
@@ -322,6 +326,19 @@ class BrowserWorker:
             timeout=120,
         )
 
+    def request_login_verification(self) -> LoginStatus:
+        return self._call(
+            self._request_login_verification,
+            timeout=45,
+        )
+
+    def submit_login_verification(self, code: str) -> LoginStatus:
+        return self._call(
+            self._submit_login_verification,
+            code,
+            timeout=60,
+        )
+
     def _login_with_credentials(
         self,
         username: str,
@@ -367,10 +384,10 @@ class BrowserWorker:
         page.wait_for_timeout(500)
 
         if self._element_visible(frame, "#verifyArea"):
-            return self._credential_failure(
+            return self._verification_status(
                 page,
-                "需要图片验证码，自动登录已停止",
-                "图片验证码",
+                "需要输入图片验证码",
+                "请输入当前页面显示的图片验证码",
             )
 
         try:
@@ -395,10 +412,16 @@ class BrowserWorker:
             current = self._password_login_frame(page, raise_on_missing=False)
             if current is not None:
                 if self._element_visible(current, "#verifyArea"):
-                    return self._credential_failure(
+                    return self._verification_status(
                         page,
-                        "QQ 要求图片验证码，自动登录已停止",
-                        "图片验证码",
+                        "QQ 要求图片验证码",
+                        "请输入当前页面显示的图片验证码",
+                    )
+                if self._mark_verification_input(current):
+                    return self._verification_status(
+                        page,
+                        "QQ 要求输入手机或安全验证码",
+                        "请查收手机验证码，或查看当前验证页面",
                     )
                 error_text = self._login_error(current)
                 if error_text:
@@ -461,6 +484,227 @@ class BrowserWorker:
                 return frame
             page.wait_for_timeout(500)
         return None
+
+    def _request_login_verification(self) -> LoginStatus:
+        page = self._ensure_page()
+        frame = self._wait_verification_frame(page)
+        if frame is None:
+            return LoginStatus(
+                state="verification_required",
+                message="当前页面未找到验证码发送按钮，请查看截图后手动处理",
+                checked_at=datetime.now().astimezone().isoformat(),
+                verification_required=True,
+                verification_hint="验证码页面可能已过期",
+            )
+        sent = frame.evaluate(
+            """
+            () => {
+              const visible = (element) => {
+                const style = getComputedStyle(element);
+                const rect = element.getBoundingClientRect();
+                return style.display !== 'none'
+                  && style.visibility !== 'hidden'
+                  && rect.width > 0 && rect.height > 0;
+              };
+              const pattern = /发送|获取|重新发送/;
+              const target = [...document.querySelectorAll('a,button')]
+                .find((element) => {
+                  const text = (element.textContent || '').trim();
+                  return visible(element)
+                    && pattern.test(text)
+                    && /验证码|短信/.test(text);
+                });
+              if (!target) return '';
+              target.click();
+              return (target.textContent || '').trim();
+            }
+            """
+        )
+        page.wait_for_timeout(800)
+        return LoginStatus(
+            state="verification_required",
+            message=(
+                "已触发验证码发送，请查收手机短信"
+                if sent
+                else "未找到发送按钮，请查收已有验证码或打开完整窗口"
+            ),
+            checked_at=datetime.now().astimezone().isoformat(),
+            verification_required=True,
+            verification_hint="输入收到的验证码后点击提交",
+            raw={"send_button": bool(sent)},
+        )
+
+    def _submit_login_verification(self, code: str) -> LoginStatus:
+        cleaned = str(code).strip()
+        if not cleaned:
+            raise ValueError("请输入验证码")
+        page = self._ensure_page()
+        frame = self._wait_verification_frame(page)
+        if frame is None:
+            return LoginStatus(
+                state="verification_required",
+                message="验证码输入框已失效，请重新执行密码登录",
+                checked_at=datetime.now().astimezone().isoformat(),
+                verification_required=True,
+            )
+
+        selector = '[data-pvp-verification-input="1"]'
+        frame.locator(selector).fill(cleaned, timeout=10_000)
+        page.wait_for_timeout(300)
+        frame.evaluate(
+            """
+            () => {
+              const visible = (element) => {
+                const style = getComputedStyle(element);
+                const rect = element.getBoundingClientRect();
+                return style.display !== 'none'
+                  && style.visibility !== 'hidden'
+                  && rect.width > 0 && rect.height > 0;
+              };
+              const imageVerify = document.querySelector('#verifyArea');
+              if (imageVerify && visible(imageVerify)) {
+                const button = document.querySelector('#login_button');
+                if (button) button.click();
+                return true;
+              }
+              const target = [...document.querySelectorAll(
+                'button,a,input[type="submit"]'
+              )].find((element) => {
+                const text = (
+                  element.textContent || element.value || ''
+                ).trim();
+                return visible(element)
+                  && /^(验证|确定|下一步|提交|登录|继续|完成)$/.test(text);
+              });
+              if (target) {
+                target.click();
+                return true;
+              }
+              const input = document.querySelector(
+                '[data-pvp-verification-input="1"]'
+              );
+              input.dispatchEvent(new KeyboardEvent('keydown', {
+                key: 'Enter', code: 'Enter', bubbles: true
+              }));
+              return false;
+            }
+            """
+        )
+
+        last_message = ""
+        for _ in range(20):
+            page.wait_for_timeout(1_000)
+            try:
+                status = self._read_status(page)
+                if status.authenticated:
+                    return status
+            except PlaywrightError:
+                pass
+            current = self._wait_verification_frame(
+                page,
+                timeout_seconds=1,
+            )
+            if current is not None:
+                error = self._verification_error(current)
+                if error:
+                    last_message = error
+
+        return LoginStatus(
+            state="verification_required",
+            message=last_message or "验证码验证尚未完成，请检查后重试",
+            checked_at=datetime.now().astimezone().isoformat(),
+            verification_required=True,
+            verification_hint="验证码错误或已过期时可重新发送",
+        )
+
+    def _wait_verification_frame(
+        self,
+        page: Any,
+        *,
+        timeout_seconds: int = 10,
+    ) -> Any | None:
+        for _ in range(timeout_seconds * 2):
+            for frame in page.frames:
+                if self._mark_verification_input(frame):
+                    return frame
+            page.wait_for_timeout(500)
+        return None
+
+    @staticmethod
+    def _mark_verification_input(frame: Any) -> bool:
+        try:
+            return bool(
+                frame.evaluate(
+                    """
+                    () => {
+                      const previous = document.querySelector(
+                        '[data-pvp-verification-input="1"]'
+                      );
+                      if (previous) {
+                        const rect = previous.getBoundingClientRect();
+                        if (rect.width > 0 && rect.height > 0) return true;
+                        previous.removeAttribute(
+                          'data-pvp-verification-input'
+                        );
+                      }
+                      const visible = (element) => {
+                        const style = getComputedStyle(element);
+                        const rect = element.getBoundingClientRect();
+                        return style.display !== 'none'
+                          && style.visibility !== 'hidden'
+                          && rect.width > 0 && rect.height > 0;
+                      };
+                      const inputs = [...document.querySelectorAll('input')]
+                        .filter((element) => {
+                          if (!visible(element)) return false;
+                          if (['u', 'p'].includes(element.id)) return false;
+                          if (!['text', 'tel', 'number'].includes(element.type)) {
+                            return false;
+                          }
+                          const marker = [
+                            element.id,
+                            element.name,
+                            element.placeholder
+                          ].join(' ');
+                          return element.id === 'verifycode'
+                            || /验证码|短信|verify|sms|otp|auth|code/i.test(
+                              marker
+                            );
+                        });
+                      if (!inputs.length) return false;
+                      inputs[0].setAttribute(
+                        'data-pvp-verification-input',
+                        '1'
+                      );
+                      return true;
+                    }
+                    """
+                )
+            )
+        except PlaywrightError:
+            return False
+
+    @staticmethod
+    def _verification_error(frame: Any) -> str:
+        try:
+            return frame.evaluate(
+                """
+                () => {
+                  const error = document.querySelector('#err_m');
+                  if (error) {
+                    const text = error.textContent.trim();
+                    if (text) return text;
+                  }
+                  const body = document.body.innerText || '';
+                  const match = body.match(
+                    /(验证码[^。\\n]{0,40}(?:错误|失效|不正确|过期)[^。\\n]{0,20})/
+                  );
+                  return match ? match[1] : '';
+                }
+                """
+            )
+        except PlaywrightError:
+            return ""
 
     @staticmethod
     def _element_visible(frame: Any, selector: str) -> bool:
@@ -534,6 +778,27 @@ class BrowserWorker:
             message=message,
             checked_at=datetime.now().astimezone().isoformat(),
             raw={"failure_kind": kind},
+        )
+
+    def _verification_status(
+        self,
+        page: Any,
+        message: str,
+        hint: str,
+    ) -> LoginStatus:
+        try:
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+            path = self.artifact_root / f"{stamp}-verification.png"
+            page.screenshot(path=str(path), full_page=False)
+        except PlaywrightError:
+            pass
+        return LoginStatus(
+            state="verification_required",
+            message=message,
+            checked_at=datetime.now().astimezone().isoformat(),
+            verification_required=True,
+            verification_hint=hint,
+            raw={"verification_required": True},
         )
 
     def close_session(self) -> None:

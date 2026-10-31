@@ -78,6 +78,22 @@
             <span>QQ 密码</span>
             <input id="qqPassword" type="password" maxlength="512" autocomplete="new-password" placeholder="留空则保留已保存密码">
           </label>
+          <div class="verification-block">
+            <label class="field compact">
+              <span>2FA / 验证码</span>
+              <input id="qqVerificationCode" type="text" minlength="3" maxlength="12" inputmode="text" autocomplete="one-time-code" placeholder="手机或图片验证码">
+            </label>
+            <div class="channel-actions">
+              <button class="text-button" id="sendVerificationBtn" type="button">
+                <i data-lucide="message-square-more"></i>
+                <span>发送验证码</span>
+              </button>
+              <button class="text-button" id="submitVerificationBtn" type="button">
+                <i data-lucide="shield-check"></i>
+                <span>提交验证</span>
+              </button>
+            </div>
+          </div>
           <div class="channel-actions">
             <button class="text-button" id="clearQqBtn" type="button" hidden>
               <i data-lucide="trash-2"></i>
