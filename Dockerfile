@@ -18,6 +18,7 @@ RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         novnc \
         openbox \
+        python3-venv \
         websockify \
         x11-utils \
         x11vnc \
@@ -25,8 +26,10 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --chown=pwuser:pwuser requirements.txt .
-RUN pip install --no-cache-dir --ignore-installed typing_extensions \
-    && pip install --no-cache-dir -r requirements.txt
+RUN python -m venv /opt/pvp-venv \
+    && /opt/pvp-venv/bin/pip install --no-cache-dir -r requirements.txt
+
+ENV PATH=/opt/pvp-venv/bin:$PATH
 
 COPY --chown=pwuser:pwuser app ./app
 COPY --chown=pwuser:pwuser README.md .
