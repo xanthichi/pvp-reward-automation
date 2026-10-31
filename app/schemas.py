@@ -102,15 +102,4 @@ class ProviderTestPayload(BaseModel):
     provider: Literal["onebot", "pushplus"]
 
 
-class VerificationCodePayload(BaseModel):
-    code: str = Field(
-        min_length=3,
-        max_length=12,
-        pattern=r"^[A-Za-z0-9]+$",
-    )
-
-    @field_validator("code")
-    @classmethod
-    def strip_code(cls, value: str) -> str:
-        return value.strip()
 

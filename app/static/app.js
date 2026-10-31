@@ -24,8 +24,6 @@ function bindEvents() {
   $("#refreshDashboardBtn").addEventListener("click", () => refreshDashboard());
   $("#loginBtn").addEventListener("click", () => openLogin("qq"));
   $("#passwordLoginBtn").addEventListener("click", passwordLogin);
-  $("#sendVerificationBtn").addEventListener("click", sendLoginVerification);
-  $("#submitVerificationBtn").addEventListener("click", submitLoginVerification);
   $("#clearQqBtn").addEventListener("click", clearQqCredentials);
   $("#visibleBrowserBtn").addEventListener("click", openVisibleBrowser);
   $("#visibleFromDialogBtn").addEventListener("click", openVisibleBrowser);
@@ -459,66 +457,19 @@ async function passwordLogin() {
     });
     if (data.ok) {
       toast("自动登录成功", data.login.nickname || "QQ 登录态已保存。");
+    } else if (data.interactive) {
+      toast(
+        "登录窗口已打开",
+        "请在 Chromium 窗口中输入图片验证码并完成手机号验证。",
+        "warning",
+        8000,
+      );
     } else {
       toast("自动登录失败", data.login.message, "error", 6500);
-      if (data.login.verification_required) {
-        showCurrentLoginPreview(data.login);
-        window.setTimeout(openVisibleBrowser, 350);
-      }
     }
     await refreshDashboard();
   } catch (error) {
     toast("自动登录失败", error.message, "error", 6500);
-  } finally {
-    setBusy(false, button);
-  }
-}
-
-async function sendLoginVerification() {
-  const button = $("#sendVerificationBtn");
-  setBusy(true, button);
-  try {
-    const data = await api("/api/login/verification/send", {
-      method: "POST",
-      body: "{}",
-    });
-    toast(
-      "验证码请求",
-      data.login.verification_hint || data.login.message,
-      data.ok ? "success" : "warning",
-      6000,
-    );
-    showCurrentLoginPreview(data.login);
-  } catch (error) {
-    toast("验证码请求失败", error.message, "error", 6000);
-  } finally {
-    setBusy(false, button);
-  }
-}
-
-async function submitLoginVerification() {
-  const button = $("#submitVerificationBtn");
-  const code = $("#qqVerificationCode").value.trim();
-  if (!code) {
-    toast("请输入验证码", "手机或图片验证码不能为空。", "warning");
-    return;
-  }
-  setBusy(true, button);
-  try {
-    const data = await api("/api/login/verification/submit", {
-      method: "POST",
-      body: JSON.stringify({ code }),
-    });
-    if (data.ok) {
-      $("#qqVerificationCode").value = "";
-      toast("验证成功", data.login.nickname || "QQ 登录态已保存。");
-      if ($("#loginDialog").open) $("#loginDialog").close();
-      await refreshDashboard();
-    } else {
-      toast("验证码未通过", data.login.message, "error", 6500);
-    }
-  } catch (error) {
-    toast("验证失败", error.message, "error", 6500);
   } finally {
     setBusy(false, button);
   }
@@ -608,12 +559,6 @@ function handleLoginStatus(login) {
       "已登录，但还没有正式服角色。请打开完整窗口完成角色绑定。";
     return;
   }
-  if (login.state === "verification_required") {
-    $("#loginPollLabel").textContent = "需要验证码";
-    $("#loginHint").textContent =
-      login.verification_hint || "请在左侧输入手机或图片验证码。";
-    return;
-  }
   if (login.state === "error") {
     $("#loginPollLabel").textContent = "检查失败";
     $("#loginHint").textContent = login.message;
@@ -654,17 +599,6 @@ async function closeLogin() {
   if (dialog.open) dialog.close();
 }
 
-function showCurrentLoginPreview(login) {
-  const dialog = $("#loginDialog");
-  if (!dialog.open) dialog.showModal();
-  $("#loginLoading").classList.add("is-hidden");
-  $("#loginScreenshot").src = `/api/login/screenshot?t=${Date.now()}`;
-  $("#loginPollLabel").textContent = "需要验证码";
-  $("#loginHint").textContent =
-    login.verification_hint || "请在左侧输入验证码后提交。";
-  state.loginActive = true;
-  startLoginPolling();
-}
 
 async function openVisibleBrowser() {
   const button = $("#visibleFromDialogBtn");

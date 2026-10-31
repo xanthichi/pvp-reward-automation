@@ -152,7 +152,7 @@ def test_qq_password_can_be_saved_without_local_https_guard(
         )
 
 
-def test_verification_code_can_be_requested_and_submitted(
+def test_password_login_opens_interactive_window(
     tmp_path: Path,
     fake_browser,
 ) -> None:
@@ -162,16 +162,21 @@ def test_verification_code_can_be_requested_and_submitted(
         disable_scheduler=True,
     )
     with TestClient(app) as client:
-        sent = client.post("/api/login/verification/send")
-        submitted = client.post(
-            "/api/login/verification/submit",
-            json={"code": "123456"},
+        saved = client.put(
+            "/api/settings",
+            json={
+                "qq_username": "123456789",
+                "qq_password": "secret",
+            },
         )
+        assert saved.status_code == 200
+        response = client.post("/api/login/password")
 
-    assert sent.status_code == 200
-    assert sent.json()["login"]["verification_required"] is True
-    assert submitted.status_code == 200
-    assert submitted.json()["login"]["state"] == "logged_in"
+    assert response.status_code == 200
+    assert response.json()["interactive"] is True
+    assert fake_browser.visible_login_calls == [
+        ("qq", "123456789", "secret", True)
+    ]
 
 
 

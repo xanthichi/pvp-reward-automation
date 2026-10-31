@@ -14,6 +14,7 @@ class FakeBrowser:
         self.artifact_root.mkdir(parents=True, exist_ok=True)
         self.execute_calls: list[int] = []
         self.credential_login_calls: list[tuple[str, str]] = []
+        self.visible_login_calls: list[tuple[str, str, str, bool]] = []
         self.close_count = 0
         self.result = BrowserResult(
             status="success",
@@ -92,7 +93,11 @@ class FakeBrowser:
         platform: str = "qq",
         username: str = "",
         password: str = "",
+        submit: bool = False,
     ) -> LoginStatus:
+        self.visible_login_calls.append(
+            (platform, username, password, submit)
+        )
         return self.login_status
 
     def close(self) -> None:

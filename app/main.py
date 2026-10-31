@@ -21,7 +21,6 @@ from app.schemas import (
     PlatformPayload,
     ProviderTestPayload,
     SettingsPayload,
-    VerificationCodePayload,
 )
 from app.security import SecretCipher
 from app.services.browser import BrowserWorker
@@ -216,34 +215,31 @@ def create_app(
 
     @app.post("/api/login/password")
     def password_login() -> dict[str, Any]:
-        logger.info("Manual QQ credential login requested")
-        status = runner.login_with_credentials(notify_failure=True)
+        logger.info("Opening interactive QQ credential login")
+        settings = get_settings(db, cipher)
+        if not settings["qq_username"] or not settings["qq_password"]:
+            raise HTTPException(
+                status_code=400,
+                detail="请先保存 QQ 账号和密码",
+            )
+        try:
+            status = browser_worker.open_visible(
+                "qq",
+                settings["qq_username"],
+                settings["qq_password"],
+                submit=True,
+            )
+        except Exception as exc:
+            logger.exception("Interactive QQ login window failed")
+            raise HTTPException(
+                status_code=502,
+                detail=f"无法打开 QQ 交互登录窗口：{exc}",
+            ) from None
         if status.authenticated:
             _remember_login(db, status)
         return {
             "ok": status.authenticated,
-            "login": status.public(),
-        }
-
-    @app.post("/api/login/verification/send")
-    def send_login_verification() -> dict[str, Any]:
-        logger.info("Verification code send requested")
-        status = runner.request_login_verification()
-        return {
-            "ok": status.state == "verification_required",
-            "login": status.public(),
-        }
-
-    @app.post("/api/login/verification/submit")
-    def submit_login_verification(
-        payload: VerificationCodePayload,
-    ) -> dict[str, Any]:
-        logger.info("Verification code submitted")
-        status = runner.submit_login_verification(payload.code)
-        if status.authenticated:
-            _remember_login(db, status)
-        return {
-            "ok": status.authenticated,
+            "interactive": True,
             "login": status.public(),
         }
 

@@ -277,12 +277,14 @@ class BrowserWorker:
         platform: str = "qq",
         username: str = "",
         password: str = "",
+        submit: bool = False,
     ) -> LoginStatus:
         return self._call(
             self._open_visible,
             platform,
             username,
             password,
+            submit,
             timeout=90,
         )
 
@@ -291,6 +293,7 @@ class BrowserWorker:
         platform: str,
         username: str,
         password: str,
+        submit: bool,
     ) -> LoginStatus:
         self._close_session()
         page = None
@@ -336,6 +339,36 @@ class BrowserWorker:
                 logger.info(
                     "Visible QQ password form opened with credentials prefilled"
                 )
+                if submit:
+                    frame.wait_for_function(
+                        """
+                        () => {
+                          const button = document.querySelector(
+                            '#login_button'
+                          );
+                          return button && !button.disabled;
+                        }
+                        """,
+                        timeout=15_000,
+                    )
+                    clicked = frame.evaluate(
+                        """
+                        () => {
+                          const button = document.querySelector(
+                            '#login_button'
+                          );
+                          if (!button || button.disabled) return false;
+                          button.click();
+                          return true;
+                        }
+                        """
+                    )
+                    logger.info(
+                        "Visible password form submitted: %s",
+                        clicked,
+                    )
+                    page.wait_for_timeout(2_500)
+        page.bring_to_front()
         return self._read_status(page)
 
     def _ensure_page_with_mode(self, *, visible: bool) -> Any:

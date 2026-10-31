@@ -420,16 +420,6 @@ img {
   min-height: 24px;
 }
 
-.verification-block {
-  margin: 10px 0 2px;
-  padding-top: 10px;
-  border-top: 1px dashed var(--line-soft);
-}
-
-.verification-block .channel-actions {
-  justify-content: space-between;
-}
-
 .button {
   display: inline-flex;
   align-items: center;

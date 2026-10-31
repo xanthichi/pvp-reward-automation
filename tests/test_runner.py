@@ -234,3 +234,39 @@ def test_auto_login_runs_without_daily_exchange(
     ]
     assert fake_browser.execute_calls == []
 
+
+def test_auto_login_verification_opens_interactive_window(
+    tmp_path: Path,
+    fake_browser,
+) -> None:
+    db = Database(tmp_path / "test.db")
+    cipher = SecretCipher(tmp_path)
+    save_settings(
+        db,
+        cipher,
+        SettingsPayload(
+            qq_username="123456789",
+            qq_password="secret",
+            qq_auto_login=True,
+        ),
+    )
+    fake_browser.login_status = LoginStatus(
+        state="login_required",
+        authenticated=False,
+    )
+    fake_browser.credential_login_status = LoginStatus(
+        state="verification_required",
+        authenticated=False,
+        verification_required=True,
+        message="需要图片验证码",
+    )
+    runner = ExchangeRunner(db, cipher, fake_browser)
+
+    status = runner.check_login(notify=False)
+
+    assert status.verification_required is True
+    assert "窗口已打开" in status.message
+    assert fake_browser.visible_login_calls == [
+        ("qq", "123456789", "secret", True)
+    ]
+

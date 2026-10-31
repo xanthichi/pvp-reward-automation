@@ -453,10 +453,52 @@ class ExchangeRunner:
     ) -> LoginStatus:
         now = datetime.now(ZoneInfo(settings["timezone"]))
         try:
-            return self.browser.login_with_credentials(
+            status = self.browser.login_with_credentials(
                 settings["qq_username"],
                 settings["qq_password"],
             )
+            if status.verification_required:
+                logger.info(
+                    "QQ security verification requires interactive window"
+                )
+                try:
+                    interactive = self.browser.open_visible(
+                        "qq",
+                        settings["qq_username"],
+                        settings["qq_password"],
+                        submit=True,
+                    )
+                    if interactive.authenticated:
+                        return interactive
+                    return LoginStatus(
+                        state="verification_required",
+                        authenticated=False,
+                        message=(
+                            "登录窗口已打开，请完成图片验证码和手机号验证"
+                        ),
+                        checked_at=now.isoformat(),
+                        verification_required=True,
+                        verification_hint=(
+                            "请在 Chromium 窗口中完成腾讯安全验证"
+                        ),
+                    )
+                except Exception:
+                    logger.exception(
+                        "Unable to open interactive verification window"
+                    )
+                    return LoginStatus(
+                        state="verification_required",
+                        authenticated=False,
+                        message=(
+                            "QQ 需要人工安全验证，但完整窗口打开失败"
+                        ),
+                        checked_at=now.isoformat(),
+                        verification_required=True,
+                        verification_hint=(
+                            "请在有桌面的本机启动程序后完成验证"
+                        ),
+                    )
+            return status
         except Exception as exc:
             logger.exception("QQ credential login failed with exception")
             return LoginStatus(
@@ -511,7 +553,11 @@ class ExchangeRunner:
         ):
             return
         account = settings["account_label"] or "默认账号"
-        title = "QQ 自动登录失败 · 王者奖励兑换"
+        title = (
+            "需要人工完成 QQ 登录验证"
+            if status.verification_required
+            else "QQ 自动登录失败 · 王者奖励兑换"
+        )
         content = "\n".join(
             [
                 f"账号：{account}",
@@ -519,8 +565,12 @@ class ExchangeRunner:
                 f"结果：{status.message}",
                 f"时间：{now.strftime('%Y-%m-%d %H:%M:%S')}",
                 "",
-                "自动登录需要验证码或人工核验时不会绕过安全校验。",
-                "请打开管理台扫码登录或使用“完整窗口”处理。",
+                (
+                    "程序已打开或尝试打开可交互 Chromium 窗口。"
+                    if status.verification_required
+                    else "自动登录遇到验证码或安全校验时不会绕过。"
+                ),
+                "请在窗口中完成图片验证码、手机验证码或其他腾讯安全验证。",
             ]
         )
         send_notifications(settings, title, content)
