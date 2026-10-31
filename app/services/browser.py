@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import logging
 import queue
 import threading
+import time
 from concurrent.futures import Future
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -16,6 +18,9 @@ from playwright.sync_api import (
 )
 
 from app.rewards import TARGET_PAGE, get_reward
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -267,16 +272,47 @@ class BrowserWorker:
             self._open_login("qq")
         return page.screenshot(type="png", full_page=False)
 
-    def open_visible(self, platform: str = "qq") -> LoginStatus:
+    def open_visible(
+        self,
+        platform: str = "qq",
+        username: str = "",
+        password: str = "",
+    ) -> LoginStatus:
         return self._call(
             self._open_visible,
             platform,
+            username,
+            password,
             timeout=90,
         )
 
-    def _open_visible(self, platform: str) -> LoginStatus:
+    def _open_visible(
+        self,
+        platform: str,
+        username: str,
+        password: str,
+    ) -> LoginStatus:
         self._close_session()
-        page = self._ensure_page_with_mode(visible=True)
+        page = None
+        last_error: Exception | None = None
+        for attempt in range(5):
+            try:
+                page = self._ensure_page_with_mode(visible=True)
+                break
+            except PlaywrightError as exc:
+                last_error = exc
+                logger.warning(
+                    "Visible Chromium launch attempt %s failed: %s",
+                    attempt + 1,
+                    exc,
+                )
+                self._context = None
+                self._page = None
+                time.sleep(0.8)
+        if page is None:
+            raise RuntimeError(
+                f"无法启动可交互 Chromium：{last_error}"
+            ) from last_error
         self._load_target(page)
         status = self._read_status(page)
         if status.authenticated:
@@ -286,6 +322,20 @@ class BrowserWorker:
             page.wait_for_timeout(2_000)
         if platform == "wechat":
             self._switch_platform(page, "wechat")
+        elif username and password:
+            frame = self._wait_password_login_frame(page)
+            if frame is not None:
+                frame.locator("#u").fill(
+                    str(username),
+                    timeout=10_000,
+                )
+                frame.locator("#p").fill(
+                    str(password),
+                    timeout=10_000,
+                )
+                logger.info(
+                    "Visible QQ password form opened with credentials prefilled"
+                )
         return self._read_status(page)
 
     def _ensure_page_with_mode(self, *, visible: bool) -> Any:
@@ -319,25 +369,36 @@ class BrowserWorker:
         username: str,
         password: str,
     ) -> LoginStatus:
-        return self._call(
+        logger.info("QQ credential login started")
+        status = self._call(
             self._login_with_credentials,
             username,
             password,
             timeout=120,
         )
+        logger.info(
+            "QQ credential login finished: state=%s message=%s",
+            status.state,
+            status.message,
+        )
+        return status
 
     def request_login_verification(self) -> LoginStatus:
-        return self._call(
+        status = self._call(
             self._request_login_verification,
             timeout=45,
         )
+        logger.info("QQ verification request: %s", status.message)
+        return status
 
     def submit_login_verification(self, code: str) -> LoginStatus:
-        return self._call(
+        status = self._call(
             self._submit_login_verification,
             code,
             timeout=60,
         )
+        logger.info("QQ verification submit: state=%s", status.state)
+        return status
 
     def _login_with_credentials(
         self,
@@ -366,8 +427,32 @@ class BrowserWorker:
             frame.wait_for_function(
                 """
                 () => {
+                  const qlogin = document.querySelector('#qlogin');
+                  const web = document.querySelector('#web_qr_login');
+                  if (!web) return false;
+                  const webRect = web.getBoundingClientRect();
+                  const qRect = qlogin
+                    ? qlogin.getBoundingClientRect()
+                    : { width: 0 };
+                  return webRect.width > 0 && qRect.width === 0;
+                }
+                """,
+                timeout=10_000,
+            )
+            frame.locator("#login_button").wait_for(
+                state="visible",
+                timeout=15_000,
+            )
+            frame.wait_for_function(
+                """
+                () => {
                   const button = document.querySelector('#login_button');
-                  return button && !button.disabled;
+                  if (!button || button.disabled) return false;
+                  const style = getComputedStyle(button);
+                  const rect = button.getBoundingClientRect();
+                  return style.display !== 'none'
+                    && style.visibility !== 'hidden'
+                    && rect.width > 0 && rect.height > 0;
                 }
                 """,
                 timeout=15_000,
@@ -379,6 +464,7 @@ class BrowserWorker:
                 "表单未就绪",
             )
 
+        logger.info("Submitting QQ password login form")
         frame.locator("#u").fill(str(username), timeout=10_000)
         frame.locator("#p").fill(str(password), timeout=10_000)
         page.wait_for_timeout(500)
@@ -391,8 +477,19 @@ class BrowserWorker:
             )
 
         try:
-            frame.locator("#login_button").click(timeout=10_000)
-        except PlaywrightError as exc:
+            clicked = frame.evaluate(
+                """
+                () => {
+                  const button = document.querySelector('#login_button');
+                  if (!button || button.disabled) return false;
+                  button.click();
+                  return true;
+                }
+                """
+            )
+            if not clicked:
+                raise RuntimeError("QQ 登录按钮不可用")
+        except (PlaywrightError, RuntimeError) as exc:
             return self._credential_failure(
                 page,
                 f"无法提交 QQ 登录表单：{exc}",
@@ -434,10 +531,10 @@ class BrowserWorker:
                         )
                 challenge = self._login_challenge(current)
                 if challenge:
-                    return self._credential_failure(
+                    return self._verification_status(
                         page,
                         challenge,
-                        challenge,
+                        "请打开完整窗口完成腾讯安全验证",
                     )
 
         return self._credential_failure(
@@ -446,8 +543,8 @@ class BrowserWorker:
             last_message or "超时",
         )
 
-    @staticmethod
     def _password_login_frame(
+        self,
         page: Any,
         *,
         raise_on_missing: bool = True,
@@ -457,13 +554,33 @@ class BrowserWorker:
                 continue
             try:
                 if frame.locator("#u").count() and frame.locator("#p").count():
-                    if frame.locator("#switcher_plogin").is_visible():
-                        frame.locator("#switcher_plogin").click(timeout=2_000)
+                    if not self._element_visible(frame, "#u"):
+                        logged = frame.evaluate(
+                            """
+                            () => {
+                              const switcher = document.querySelector(
+                                '#switcher_plogin'
+                              );
+                              if (!switcher) return false;
+                              switcher.click();
+                              return true;
+                            }
+                            """
+                        )
+                        logger.info(
+                            "QQ login switched to password mode: %s",
+                            logged,
+                        )
                         page_object = getattr(frame, "page", None)
-                        if page_object is not None:
-                            page_object.wait_for_timeout(300)
-                    return frame
+                        for _ in range(40):
+                            if self._password_view_active(frame):
+                                break
+                            if page_object is not None:
+                                page_object.wait_for_timeout(200)
+                    if self._password_view_active(frame):
+                        return frame
             except PlaywrightError:
+                logger.exception("Failed to inspect QQ password login frame")
                 continue
         if not raise_on_missing:
             return None
@@ -729,6 +846,33 @@ class BrowserWorker:
             return False
 
     @staticmethod
+    def _password_view_active(frame: Any) -> bool:
+        try:
+            return bool(
+                frame.evaluate(
+                    """
+                    () => {
+                      const u = document.querySelector('#u');
+                      const web = document.querySelector('#web_qr_login');
+                      const qlogin = document.querySelector('#qlogin');
+                      const uRect = u ? u.getBoundingClientRect() : null;
+                      const webRect = web ? web.getBoundingClientRect() : null;
+                      const qRect = qlogin
+                        ? qlogin.getBoundingClientRect()
+                        : null;
+                      return Boolean(
+                        uRect && uRect.width > 0
+                        && webRect && webRect.width > 0
+                        && (!qRect || qRect.width === 0)
+                      );
+                    }
+                    """
+                )
+            )
+        except PlaywrightError:
+            return False
+
+    @staticmethod
     def _login_error(frame: Any) -> str:
         try:
             return frame.evaluate(
@@ -812,6 +956,7 @@ class BrowserWorker:
                 pass
         self._context = None
         self._page = None
+        time.sleep(0.4)
 
     def execute_reward(self, reward_id: int) -> BrowserResult:
         return self._call(

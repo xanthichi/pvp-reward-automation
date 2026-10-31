@@ -463,6 +463,7 @@ async function passwordLogin() {
       toast("自动登录失败", data.login.message, "error", 6500);
       if (data.login.verification_required) {
         showCurrentLoginPreview(data.login);
+        window.setTimeout(openVisibleBrowser, 350);
       }
     }
     await refreshDashboard();

@@ -87,7 +87,12 @@ class FakeBrowser:
     def close_session(self) -> None:
         return None
 
-    def open_visible(self, platform: str = "qq") -> LoginStatus:
+    def open_visible(
+        self,
+        platform: str = "qq",
+        username: str = "",
+        password: str = "",
+    ) -> LoginStatus:
         return self.login_status
 
     def close(self) -> None:

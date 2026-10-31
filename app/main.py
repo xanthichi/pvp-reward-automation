@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -45,6 +47,8 @@ def create_app(
         data_dir or os.getenv("PVP_DATA_DIR", package_root / "data")
     )
     configured_data_dir.mkdir(parents=True, exist_ok=True)
+    _configure_app_logging(configured_data_dir)
+    logger = logging.getLogger(__name__)
     static_dir = Path(__file__).parent / "static"
     scheduler_disabled = bool(disable_scheduler)
 
@@ -151,6 +155,7 @@ def create_app(
     def start_login(
         payload: LoginStartPayload = LoginStartPayload(),
     ) -> dict[str, Any]:
+        logger.info("Opening QR login page: platform=%s", payload.platform)
         try:
             status = browser_worker.open_login(payload.platform)
         except Exception as exc:
@@ -211,6 +216,7 @@ def create_app(
 
     @app.post("/api/login/password")
     def password_login() -> dict[str, Any]:
+        logger.info("Manual QQ credential login requested")
         status = runner.login_with_credentials(notify_failure=True)
         if status.authenticated:
             _remember_login(db, status)
@@ -221,6 +227,7 @@ def create_app(
 
     @app.post("/api/login/verification/send")
     def send_login_verification() -> dict[str, Any]:
+        logger.info("Verification code send requested")
         status = runner.request_login_verification()
         return {
             "ok": status.state == "verification_required",
@@ -231,6 +238,7 @@ def create_app(
     def submit_login_verification(
         payload: VerificationCodePayload,
     ) -> dict[str, Any]:
+        logger.info("Verification code submitted")
         status = runner.submit_login_verification(payload.code)
         if status.authenticated:
             _remember_login(db, status)
@@ -248,8 +256,14 @@ def create_app(
     def open_visible_browser(
         payload: LoginStartPayload = LoginStartPayload(),
     ) -> dict[str, Any]:
+        logger.info("Opening visible Chromium login window")
         try:
-            status = browser_worker.open_visible(payload.platform)
+            settings = get_settings(db, cipher)
+            status = browser_worker.open_visible(
+                payload.platform,
+                settings["qq_username"],
+                settings["qq_password"],
+            )
         except Exception as exc:
             raise HTTPException(
                 status_code=502,
@@ -337,6 +351,29 @@ def _remember_login(db: Database, status: Any) -> None:
     else:
         db.set_runtime("last_login_state", status.state)
         db.set_runtime("last_login_check", status.checked_at)
+
+
+def _configure_app_logging(data_dir: Path) -> None:
+    logger = logging.getLogger("app")
+    if getattr(logger, "_pvp_configured", False):
+        return
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+    formatter = logging.Formatter(
+        "%(asctime)s %(levelname)s %(name)s: %(message)s"
+    )
+    file_handler = RotatingFileHandler(
+        data_dir / "app.log",
+        maxBytes=2_000_000,
+        backupCount=3,
+        encoding="utf-8",
+    )
+    file_handler.setFormatter(formatter)
+    stream_handler = logging.StreamHandler()
+    stream_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+    logger.addHandler(stream_handler)
+    logger._pvp_configured = True
 
 
 def _exchange_public(row: Any) -> dict[str, Any]:

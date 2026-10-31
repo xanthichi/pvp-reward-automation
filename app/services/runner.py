@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -17,6 +18,9 @@ from app.services.settings import (
     get_settings,
     mark_login,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -146,7 +150,16 @@ class ExchangeRunner:
                     browser_result.status == "login_expired"
                     and _auto_login_enabled(settings)
                 ):
+                    logger.info(
+                        "Session expired before reward %s; trying credential login",
+                        selected_id,
+                    )
                     auto_status = self._perform_auto_login(settings)
+                    logger.info(
+                        "Credential login result: %s %s",
+                        auto_status.state,
+                        auto_status.message,
+                    )
                     if auto_status.authenticated:
                         self._record_login_success(auto_status, now)
                         try:
@@ -309,8 +322,15 @@ class ExchangeRunner:
 
             if _auto_login_enabled(settings):
                 if self._auto_login_on_cooldown(now):
+                    logger.info("Credential login skipped during cooldown")
                     return status
+                logger.info("Login expired; trying QQ credential login")
                 auto_status = self._perform_auto_login(settings)
+                logger.info(
+                    "Credential login result: %s %s",
+                    auto_status.state,
+                    auto_status.message,
+                )
                 if auto_status.authenticated:
                     self._record_login_success(auto_status, now)
                     self.db.set_runtime(
@@ -366,6 +386,11 @@ class ExchangeRunner:
                     checked_at=now.isoformat(),
                 )
             status = self._perform_auto_login(settings)
+            logger.info(
+                "Manual credential login result: %s %s",
+                status.state,
+                status.message,
+            )
             self.db.set_runtime(
                 "last_login_check",
                 now.isoformat(),
@@ -433,6 +458,7 @@ class ExchangeRunner:
                 settings["qq_password"],
             )
         except Exception as exc:
+            logger.exception("QQ credential login failed with exception")
             return LoginStatus(
                 state="login_failed",
                 message="QQ 自动登录执行失败，请打开完整窗口重试",

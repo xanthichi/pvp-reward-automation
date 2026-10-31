@@ -146,6 +146,7 @@ docker run --rm \
 ```text
 data/pvp-reward.db          配置、推送 Token、执行记录
 data/secret.key             推送 Token 加密密钥
+data/app.log                登录与执行诊断日志，不记录账号密码或验证码
 data/browser-profile/       游戏登录 Cookie 和浏览器持久化数据
 data/artifacts/             执行截图
 ```
